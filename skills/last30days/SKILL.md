@@ -17,6 +17,7 @@ metadata:
       optionalEnv:
         - SCRAPECREATORS_API_KEY
         - OPENAI_API_KEY
+        - GETXAPI_KEY
         - XAI_API_KEY
         - X_BEARER_TOKEN
         - OPENROUTER_API_KEY
@@ -66,6 +67,18 @@ metadata:
       - ai-skill
       - clawhub
 ---
+
+## GetXAPI backend (DevelopIQ fork)
+
+When the user has a GetXAPI key, use the `GETXAPI_KEY` environment variable or
+existing private `~/.config/last30days/.env` entry. Pin
+`LAST30DAYS_X_BACKEND=getxapi` for GetXAPI-only X research. This supports ordinary
+topic searches and FROM/ABOUT person searches using public posts and engagement
+metrics. No X session cookie is needed. Do not ask for browser login when this
+backend is selected. Never print a key. Run doctor to verify configuration;
+key presence is not proof of a funded, working account. Normal `/last30days`
+invocation and result formatting stay unchanged. Use this fork's install source
+`DevelopIQ-ai/last30days-skill` when installing or updating this GetXAPI variant.
 
 # STEP 0: STALE-CLONE SELF-CHECK — RUN BEFORE READING BELOW
 

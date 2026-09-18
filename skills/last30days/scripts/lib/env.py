@@ -67,7 +67,7 @@ KEYCHAIN_KEYS = (
     "GOOGLE_GENAI_API_KEY", "SCRAPECREATORS_API_KEY", "APIFY_API_TOKEN",
     "AUTH_TOKEN", "CT0", "BSKY_HANDLE", "BSKY_APP_PASSWORD",
     "TRUTHSOCIAL_TOKEN", "BRAVE_API_KEY", "EXA_API_KEY", "SERPER_API_KEY",
-    "OPENROUTER_API_KEY", "PERPLEXITY_API_KEY", "PARALLEL_API_KEY", "XQUIK_API_KEY",
+    "OPENROUTER_API_KEY", "PERPLEXITY_API_KEY", "PARALLEL_API_KEY", "XQUIK_API_KEY", "GETXAPI_KEY",
     "XIAOHONGSHU_API_BASE", "GITHUB_TOKEN", "BRIGHTDATA_API_KEY",
     "X_BEARER_TOKEN",
 )
@@ -639,6 +639,7 @@ def get_config(policy: ConfigLoadPolicy | None = None) -> dict[str, Any]:
         ('LAST30DAYS_PERPLEXITY_DEEP_TIMEOUT_SECONDS', '600'),
         ('PARALLEL_API_KEY', None),
         ('XQUIK_API_KEY', None),
+        ('GETXAPI_KEY', None),
         # Bright Data CLI. Optional: the CLI normally owns its own auth via
         # `brightdata login`, so this only matters for users who prefer an
         # explicit key in a `.env` file or the keychain. Registered here so
@@ -1117,6 +1118,7 @@ _X_METHOD_LABELS = {
     "xurl": "oauth2",  # xurl CLI (official X API v2, OAuth2, free developer app)
     "xapi": "bearer",
     "xquik": "api_key",
+    "getxapi": "api_key",
 }
 
 
@@ -1173,7 +1175,7 @@ def get_reddit_source(config: dict[str, Any]) -> str | None:
 #   xai   — xAI/Grok live search (XAI_API_KEY)
 #   xurl  — official X API v2 (xurl CLI, OAuth2)
 #   xquik — key-based REST X search (XQUIK_API_KEY)
-_X_BACKEND_ORDER = ("bird", "xai", "xurl", "xquik")
+_X_BACKEND_ORDER = ("bird", "xai", "xurl", "xquik", "getxapi")
 
 # Opt-in backends: never in the default unpinned auto chain; require an
 # explicit pin. grok is here because a leftover ~/.grok/auth.json must never
@@ -1302,6 +1304,8 @@ def _x_backend_available(
             # token store) — never the live `xurl whoami` network call.
             return xurl_x.has_stored_auth()
         return xurl_x.is_available()
+    if backend == 'getxapi':
+        return bool(config.get('GETXAPI_KEY'))
     if backend == 'xquik':
         return is_xquik_available(config)
     if backend == 'xapi':
@@ -1794,6 +1798,7 @@ def get_x_source_status(config: dict[str, Any], probe: bool = False) -> dict[str
         'xai': xai_available,
         'xurl': xurl_available,
         'xquik': xquik_available and xquik_working is not False,
+        'getxapi': bool(config.get('GETXAPI_KEY')),
         'grok': grok_available,
         'xapi': xapi_available,
     }
@@ -1812,6 +1817,7 @@ def get_x_source_status(config: dict[str, Any], probe: bool = False) -> dict[str
         "xapi_available": xapi_available,
         "grok_available": grok_available,
         "xurl_available": xurl_available,
+        "getxapi_available": bool(config.get("GETXAPI_KEY")),
         "xquik_available": xquik_available,
         "xquik_working": xquik_working,
         "xquik_status": xquik_status,

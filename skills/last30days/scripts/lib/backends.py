@@ -470,11 +470,12 @@ _X_PROBES: Dict[str, Callable[[Dict[str, Any]], BackendFinding]] = {
     "grok": _probe_grok,
     "bird": _probe_bird,
     "xurl": _probe_xurl,
+    "getxapi": _key_probe("getxapi", "GETXAPI_KEY", "GETXAPI_KEY (getxapi.com)"),
     "xquik": _key_probe("xquik", "XQUIK_API_KEY", "XQUIK_API_KEY (xquik.com)"),
     # Direct X API v2 with an app-only bearer: key presence only, no network.
     "xapi": _probe_xapi,
 }
-_X_PAID = {"xai", "xquik", "xapi"}
+_X_PAID = {"xai", "xquik", "xapi", "getxapi"}
 # Opt-in backends: never auto-selected; require explicit pin.
 _X_OPT_IN = set(env.X_BACKEND_OPT_IN)
 
@@ -504,6 +505,7 @@ _X_REQUIRES: Dict[str, str] = {
     "bird": "X browser cookies (AUTH_TOKEN/CT0) + node",
     "xurl": "xurl CLI installed + OAuth2 login",
     "xquik": "XQUIK_API_KEY (xquik.com)",
+    "getxapi": "GETXAPI_KEY (getxapi.com)",
     "xapi": "X_BEARER_TOKEN (X API v2)",
 }
 

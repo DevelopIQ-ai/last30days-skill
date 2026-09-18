@@ -34,6 +34,7 @@ from . import (
     env,
     github,
     grok_x,
+    getxapi,
     grounding,
     hackernews,
     health,
@@ -3967,7 +3968,7 @@ def _run_supplemental_searches(
     pinned = runtime.x_search_backend
     if pinned:
         chain = [pinned] + [b for b in chain if b != pinned]
-    primary = next((b for b in chain if b in ("grok", "bird", "xapi", "xquik")), None)
+    primary = next((b for b in chain if b in ("grok", "bird", "xapi", "xquik", "getxapi")), None)
 
     # Name lane (posts naming the subject in plain text, no @-mention) is
     # grok-only for now: it needs phrase-quoting and negation operators the
@@ -4050,15 +4051,16 @@ def _run_supplemental_searches(
             )
             _xapi_lane_receipt(lane_warnings)
             return items, False
-    elif primary == "xquik":
-        xquik_token = env.get_xquik_token(config)
+    elif primary in ("xquik", "getxapi"):
+        adapter = getxapi if primary == "getxapi" else xquik
+        token = config.get("GETXAPI_KEY", "") if primary == "getxapi" else env.get_xquik_token(config)
 
         def _from_lane(hs: list, count: int, and_topic: bool = False) -> tuple[list, bool]:
             # xquik.search_handles doesn't support and_topic yet
-            return xquik.search_handles(hs, topic, from_date, to_date, count_per=count, token=xquik_token), False
+            return adapter.search_handles(hs, topic, from_date, to_date, count_per=count, token=token), False
 
         def _about_lane(hs: list, count: int) -> tuple[list, bool]:
-            return xquik.search_mentions(hs, from_date, to_date, topic=topic, count_per=count, token=xquik_token), False
+            return adapter.search_mentions(hs, from_date, to_date, topic=topic, count_per=count, token=token), False
     else:
         return  # primary X backend has no handle-lane support (xai/xurl) or none configured
 
@@ -4465,6 +4467,9 @@ def _fetch_x_backend(backend, query, from_date, to_date, depth, config, warnings
     elif backend == "xurl":
         result = xurl_x.search_x(query, depth=depth)
         items = xurl_x.parse_x_response(result, topic=query)
+    elif backend == "getxapi":
+        result = getxapi.search_x(query, from_date, to_date, depth=depth, token=config.get("GETXAPI_KEY", ""))
+        items = result.get("items", [])
     elif backend == "xquik":
         result = xquik.search_xquik(query, from_date, to_date, depth=depth, token=env.get_xquik_token(config))
         items = xquik.parse_xquik_response(result)

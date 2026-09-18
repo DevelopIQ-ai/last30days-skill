@@ -1,5 +1,7 @@
 # /last30days
 
+> GetXAPI 分支：参阅[配置与使用](FORK.md)。
+
 [English](README.md) | [Français](README.fr.md) | [Deutsch](README.de.md) | [Español](README.es.md) | [Português (Brasil)](README.pt-BR.md) | [日本語](README.ja.md) | 简体中文
 
 <p align="center">

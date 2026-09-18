@@ -1,5 +1,7 @@
 # /last30days
 
+> GetXAPI 対応フォーク：[設定と使い方](FORK.md)。
+
 [English](README.md) | [Français](README.fr.md) | [Deutsch](README.de.md) | [Español](README.es.md) | [Português (Brasil)](README.pt-BR.md) | 日本語 | [简体中文](README.zh-CN.md)
 
 <p align="center">

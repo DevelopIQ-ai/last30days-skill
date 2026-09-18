@@ -147,7 +147,7 @@ def test_lane_signal_in_env_file_only_is_ignored(tmp_path, monkeypatch):
 
 
 def test_constants():
-    assert env.X_BACKEND_ORDER == ("bird", "xai", "xurl", "xquik")
+    assert env.X_BACKEND_ORDER == ("bird", "xai", "xurl", "xquik", "getxapi")
     assert env.X_BACKEND_OPT_IN == ("grok", "xapi")
     assert env.X_OFFICIAL == ("xapi", "xai", "xurl")
     assert set(env.X_OFFICIAL) <= set(env.X_BACKEND_KNOWN)
