@@ -33,8 +33,10 @@ fallback in the ordinary X chain. Existing host-specific policies remain intact.
 uv run pytest tests/test_getxapi.py tests/test_config_x_backends.py tests/test_backend_descriptors.py tests/test_x_policy.py
 ```
 
-A live adapter/pipeline smoke test returned ten recent posts with engagement using
-the existing provider account. Credentials were held in memory, not committed or
+Live checks returned ten recent author posts through the adapter and a complete
+X-only engine report for “AI coding agents”: six ranked results with engagement,
+six clusters, `source_status.x=ok`, and exit code 0. The focused suite passes
+290 tests, including an inclusive end-date regression. Credentials were held in memory, not committed or
 saved into this repository. Fresh installs still need their own credential setup.
 
 See [CONFIGURATION.md](CONFIGURATION.md) for configuration details. Original MIT

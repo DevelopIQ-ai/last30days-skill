@@ -21,7 +21,7 @@ def test_paging_dedupe_and_normalization():
     assert call.call_args_list[0].kwargs['headers'] == {'Authorization': 'Bearer dummy'}
     params = parse_qs(urlparse(call.call_args_list[1].args[0]).query)
     assert params['cursor'] == ['next']
-    assert 'since:2026-08-19 until:2026-09-19' in params['q'][0]
+    assert 'since:2026-08-19 until:2026-09-20' in params['q'][0]
 
 
 def test_partial_results_survive_rate_limit():
@@ -93,3 +93,10 @@ def test_page_budget():
 def test_key_is_loaded(monkeypatch):
     monkeypatch.setenv('GETXAPI_KEY', 'dummy-getxapi')
     assert env.get_config()['GETXAPI_KEY'] == 'dummy-getxapi'
+
+
+def test_engine_end_date_includes_today():
+    with patch.object(http, 'get', return_value={'tweets': [tweet()], 'has_more': False}) as call:
+        result = getxapi.search_x('agents', '2026-08-19', '2026-09-18', token='dummy')
+    assert len(result['items']) == 1
+    assert 'until:2026-09-19' in parse_qs(urlparse(call.call_args.args[0]).query)['q'][0]

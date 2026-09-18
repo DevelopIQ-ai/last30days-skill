@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import re
+from datetime import date, timedelta
 from urllib.parse import urlencode
 
 from . import http, xquik
@@ -17,7 +18,9 @@ def _search(query, from_date, to_date, token, limit, topic, prefix="GX"):
     cursor = None
     # The engine owns the date window even if a planner supplied operators.
     query = re.sub(r"\b(?:since|until):\S+", "", query).strip()
-    params = {"q": f"{query} since:{from_date} until:{to_date}", "product": "Latest"}
+    # Engine dates are inclusive; X until: is exclusive. Include the final day.
+    until = (date.fromisoformat(to_date) + timedelta(days=1)).isoformat()
+    params = {"q": f"{query} since:{from_date} until:{until}", "product": "Latest"}
     for _ in range(MAX_PAGES):
         if cursor:
             params["cursor"] = cursor
@@ -46,7 +49,7 @@ def _search(query, from_date, to_date, token, limit, topic, prefix="GX"):
                 continue
             normalized = dict(tweet, author=dict(author, username=handle))
             item = xquik._parse_tweet(normalized, len(items), topic, id_prefix=prefix)
-            if item and (not item['date'] or from_date <= item['date'] < to_date):
+            if item and (not item['date'] or from_date <= item['date'] <= to_date):
                 seen_ids.add(post_id)
                 item['post_id'] = post_id
                 items.append(item)
