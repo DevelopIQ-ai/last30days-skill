@@ -36,17 +36,13 @@ def parser():
     )
     for flag, help_text in {
         "days": "Lookback days (30)",
-        "target": "Accepted result target (20)",
         "min-engagement": "Minimum likes/score/points/stars, excluding views (0)",
-        "max-rounds": "Maximum planner rounds (5)",
         "queries-per-round": "Queries per round, 1-3 (3)",
-        "max-calls": "Planner calls + Jev calls + engine invocations (150); not raw HTTP requests",
-        "max-searches": "Maximum engine invocations (15)",
-        "patience": "Successful empty rounds before stopping (2)",
     }.items():
         p.add_argument("--" + flag, type=int, help=help_text)
     for flag, help_text in {
-        "timeout": "Total active runtime in seconds, across resumes (300)",
+        "request-timeout": "Timeout per planner/Jev request (60 seconds); no total run deadline",
+        "search-timeout": "Timeout per engine invocation (180 seconds); no total run deadline",
         "accept-threshold": "Every criterion must reach this probability (0.8)",
         "reject-threshold": "Any criterion at or below this probability rejects (0.2)",
         "evidence-threshold": "Minimum sufficient-evidence probability (0.8)",
@@ -60,7 +56,7 @@ def parser():
     p.add_argument(
         "--resume",
         type=Path,
-        help="Resume a checkpoint without changing its configuration or budgets",
+        help="Resume a checkpoint without changing its configuration",
     )
     p.add_argument("--emit", choices=("compact", "json"), default="compact")
     return p
@@ -89,6 +85,8 @@ def render(state, output):
         "Decisions: " + ", ".join(f"{k}={v}" for k, v in sorted(counts.items())),
         "",
     ]
+    if state.get("completion_reason"):
+        lines.extend(["Planner decision: " + state["completion_reason"], ""])
     for identity in state["accepted"]:
         entry = state["candidates"][identity]
         item = entry["item"]
@@ -121,6 +119,8 @@ def main(argv=None):
     try:
         if args.resume:
             saved = json.loads(args.resume.read_text())
+            if not isinstance(saved, dict) or saved.get("schema_version") != 2:
+                p.error("unsupported checkpoint version; start a new discovery run")
             if not isinstance(saved.get("config"), dict):
                 raise ValueError("invalid checkpoint")
             config_values = {**saved["config"], **options}

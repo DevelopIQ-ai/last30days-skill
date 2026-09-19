@@ -17,14 +17,13 @@ This is a focused **configuration reference** maintained alongside the engine. T
 
 ---
 
-## Iterative discovery with Jev
+## Iterative discovery with Jev (DevelopIQ fork)
 
 Input limits: the objective is at most 8,000 characters; each semantic condition is
 at most 2,000. The JSON-encoded objective plus criteria must fit 40,000 characters.
 Evidence is explicitly bounded to fit Jev: at most 24,000 body characters, a 2,000-character
 title, and five attributed comment excerpts of up to 500 characters. The body may be
 shortened further for long criteria; `evidence_truncated` records clipping.
- (DevelopIQ fork)
 
 Use `/last30days find developers who tried an AI coding tool and want an alternative`.
 Describe filters in plain language alongside the objective; the host translates them into
@@ -39,7 +38,7 @@ python3 skills/last30days/scripts/discover.py \
   --sources x,reddit,hackernews --days 30 \
   --include "Describes a problem they personally experienced" \
   --exclude "Promotes their own product" --language English \
-  --target 20 --output ./discovery-results.json
+  --output ./discovery-results.json
 ```
 
 A general model generates queries, the existing engine retrieves candidates, and Jev
@@ -55,36 +54,43 @@ evidence, not instructions. No database, hosted worker, Trigger, or Supabase is 
 | `--include`, `--exclude` | none | Repeatable semantic conditions; at most six additional conditions total, including language |
 | `--language` | none | Jev checks substantive content language; this is a semantic filter |
 | `--min-engagement` | `0` | Require a known likes, score, points, or GitHub stars value at least this large; views/followers do not count, unknown engagement fails when the minimum is positive |
-| `--target` | `20` | Stop after this many unique accepted candidates |
-| `--max-rounds`, `--queries-per-round` | `5`, `3` | Round limit and one to three generated queries per round |
-| `--timeout` | `300` | Total active execution seconds, carried across resumes |
-| `--max-calls`, `--max-searches` | `150`, `15` | Wrapper call and engine invocation limits, carried across resumes |
-| `--patience` | `2` | Consecutive successful complete rounds with no new accepted candidates before stopping |
+| `--queries-per-round` | `3` | One to three queries per batch; this does not limit the total number of rounds |
+| `--request-timeout` | `60` | Timeout in seconds for each planner or Jev network operation, not total runtime |
+| `--search-timeout` | `180` | Timeout in seconds for one engine invocation, not total runtime |
 | `--accept-threshold`, `--reject-threshold` | `0.8`, `0.2` | Accept only when every criterion reaches the acceptance threshold; reject when any criterion reaches or falls below the rejection threshold, provided evidence is sufficient |
 | `--evidence-threshold` | `0.8` | Evidence sufficiency must meet this threshold; otherwise keep the candidate uncertain even if a criterion received a confident “no” |
 | `--output` | `~/Documents/Last30Days/discovery/<UTC-timestamp>-<id>.json` | JSON checkpoint containing results and run state; existing files require `--resume` |
-| `--resume` | none | Resume the specified checkpoint with its original configuration and consumed budgets |
+| `--resume` | none | Resume a version 2 checkpoint with its original configuration, history, and pending work |
 | `--emit` | `compact` | `compact` summary or `json` state |
 
-`--max-calls` counts planner requests + per-candidate Jev requests + engine invocations.
-One engine invocation can issue several provider requests; this is **not** a raw HTTP
-request limit or a dollar budget. Provider charges still apply.
+The planner decides when research is complete by considering coverage of the objective,
+results from different search directions, and whether further searches are likely to
+find new unique matches. There is no automatic total limit on accepted matches,
+rounds, calls, searches, runtime, or consecutive empty rounds, and no dollar cap.
+Provider charges continue until the planner stops, the user cancels, or an operation
+fails. Call counts describe activity; they are not comprehensive cost accounting.
+Repeated queries are skipped and reported back to the planner, not treated as an
+automatic completion signal. Individual search backends still retain their own
+per-invocation pagination and retrieval bounds.
 
 The discovery checkpoint location is controlled by `--output`; it does not use the
 ordinary engine report save-directory settings. Use `--resume ./discovery-results.json`
 to continue without repeating the objective or options. Overrides must exactly match
-the saved configuration.
+the saved configuration. Legacy version 1 checkpoints are explicitly rejected;
+start a new run rather than restoring their old automatic stop settings.
 
 Checkpoints are saved atomically and retain candidates, decisions, probabilities,
-source statuses, query history, accepted IDs, budgets, and pending work. Canonical URLs
+source statuses, query history, accepted IDs, activity counts, and pending work. Canonical URLs
 prevent repeated judging of the same result. Uncertain and pending candidates are not
 accepted matches. Jev judges the engine's supplied text, which may be an excerpt;
 it does not establish facts absent from that text or guarantee classification accuracy.
 
-Stop reasons are `target_reached`, `max_rounds`, `deadline`, `call_limit`,
-`search_limit`, `saturated`, `no_new_queries`, `source_failure`, `provider_failure`,
-and `cancelled`. Failures do not count as successful empty rounds. `saturated` only
-means the configured patience was reached; it does not establish exhaustive coverage.
+A successful planner stop is recorded as `planner_complete`, with its
+`completion_reason` and coverage summary retained in the checkpoint. Operational
+failures and user cancellation leave incomplete checkpointed work; they are not
+successful completion. Per-operation timeouts prevent a single request from hanging,
+not a long investigation from continuing. The planner's coverage judgment is not a
+guarantee of exhaustive recall or classification accuracy.
 
 **`LAST30DAYS_SKIP_RUN_CACHE=1`** is a process-environment opt-in that prevents
 engine writes to shared `last-run.json` and `last-report.json`. Discovery sets this

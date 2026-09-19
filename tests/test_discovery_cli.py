@@ -37,7 +37,7 @@ def test_cli_parses_filters_and_returns_compact_output(tmp_path, capsys):
             and cfg.language == "English"
         )
         return {
-            "stop_reason": "max_rounds",
+            "stop_reason": "planner_complete",
             "accepted": [],
             "candidates": {},
             "rounds": [{}],
@@ -66,4 +66,13 @@ def test_cli_parses_filters_and_returns_compact_output(tmp_path, capsys):
             )
             == 0
         )
-    assert "max_rounds" in capsys.readouterr().out
+    assert "planner_complete" in capsys.readouterr().out
+
+
+@pytest.mark.parametrize("payload", ["null", "[]"])
+def test_malformed_resume_checkpoint_is_reported_cleanly(tmp_path, payload):
+    path = tmp_path / "r.json"
+    path.write_text(payload)
+    with pytest.raises(SystemExit) as error:
+        module().main(["--resume", str(path)])
+    assert error.value.code == 2

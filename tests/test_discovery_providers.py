@@ -95,7 +95,7 @@ def test_planner_plan(monkeypatch):
                 {
                     "message": {
                         "content": json.dumps(
-                            {"queries": ["Jev latency", " Jev latency ", "Jev routing"]}
+                            {"action": "search", "reason": "Explore another angle", "coverage_summary": "Coverage incomplete", "queries": ["Jev latency", " Jev latency ", "Jev routing"]}
                         )
                     }
                 }
@@ -105,7 +105,8 @@ def test_planner_plan(monkeypatch):
     out = p.Planner({"AI_GATEWAY_API_KEY": "test"}).plan(
         "find builders", {"days": 30}, {"rejected": ["x"]}, 2
     )
-    assert out == ["Jev latency", "Jev routing"]
+    assert out["queries"] == ["Jev latency", "Jev routing"]
+    assert out["action"] == "search"
     assert calls[0][0] == "https://ai-gateway.vercel.sh/v1/chat/completions"
     assert "feedback" in calls[0][2]["messages"][1]["content"]
 
@@ -114,7 +115,7 @@ def test_planner_plan(monkeypatch):
 def test_planner_rejects_invalid_queries(monkeypatch, queries):
     fixture(
         monkeypatch,
-        {"choices": [{"message": {"content": json.dumps({"queries": queries})}}]},
+        {"choices": [{"message": {"content": json.dumps({"action": "search", "reason": "Explore another angle", "coverage_summary": "Coverage incomplete", "queries": queries})}}]},
     )
     with pytest.raises(p.ProviderError):
         p.Planner({"OPENAI_API_KEY": "test"}).plan("q", {}, {}, 2)
@@ -231,7 +232,7 @@ def test_planner_removes_source_and_temporal_operators(monkeypatch):
                     "message": {
                         "content": json.dumps(
                             {
-                                "queries": [
+                                "action": "search", "reason": "Explore another angle", "coverage_summary": "Coverage incomplete", "queries": [
                                     "Jev router site:x since:2026-08-20 until:2026-09-19",
                                     "site:reddit.com Jev routing after:2026-08-01 before:2026-10-01",
                                 ]
@@ -242,7 +243,7 @@ def test_planner_removes_source_and_temporal_operators(monkeypatch):
             ]
         },
     )
-    assert p.Planner({"AI_GATEWAY_API_KEY": "test"}).plan("q", {}, {}, 2) == [
+    assert p.Planner({"AI_GATEWAY_API_KEY": "test"}).plan("q", {}, {}, 2)["queries"] == [
         "Jev router",
         "Jev routing",
     ]
@@ -255,7 +256,7 @@ def test_planner_rejects_operator_only_query(monkeypatch):
             "choices": [
                 {
                     "message": {
-                        "content": json.dumps({"queries": ["site:x since:2026-08-20"]})
+                        "content": json.dumps({"action": "search", "reason": "Explore another angle", "coverage_summary": "Coverage incomplete", "queries": ["site:x since:2026-08-20"]})
                     }
                 }
             ]
@@ -313,3 +314,28 @@ def _large_transport(connection):
 
 def test_receive_before_join_does_not_deadlock_large_response():
     assert len(p._bounded_request(_large_transport, (), 5)["body"]) == 500_000
+
+
+def test_planner_decides_stop_with_explicit_coverage(monkeypatch):
+    decision={'action':'stop','reason':'Distinct angles repeatedly returned the same matches.', 'coverage_summary':'Covered builder reports and integrations across all available sources; uncertainty remains around private projects.', 'queries':[]}
+    calls=fixture(monkeypatch,{'choices':[{'message':{'content':json.dumps(decision)}}],'usage':{'prompt_tokens':12,'completion_tokens':20,'private':'hidden'}})
+    result=p.Planner({'OPENAI_API_KEY':'test'}).plan('builders',{}, {'previous_assessment':{'coverage_summary':'Earlier coverage'}},5)
+    assert all(result[k]==v for k,v in decision.items())
+    assert result['usage']=={'prompt_tokens':12,'completion_tokens':20}
+    prompt=calls[0][2]['messages'][0]['content']
+    assert 'holistic' in prompt and 'previous_assessment' in prompt
+
+
+@pytest.mark.parametrize('decision',[
+ {'action':'stop','reason':'','coverage_summary':'Covered','queries':[]},
+ {'action':'stop','coverage_summary':'Covered','queries':[]},
+ {'action':'stop','reason':'done','coverage_summary':'Covered','queries':['more']},
+ {'action':'halt','reason':'done','coverage_summary':'Covered','queries':[]},
+ {'action':'search','reason':'more','coverage_summary':'Covered','queries':[]},
+ {'action':'stop','reason':'done','coverage_summary':2,'queries':[]},
+ {'action':'stop','reason':'x'*2001,'coverage_summary':'Covered','queries':[]},
+ {'action':'stop','reason':'done','coverage_summary':'x'*8001,'queries':[]},
+])
+def test_planner_rejects_malformed_decision(monkeypatch,decision):
+    fixture(monkeypatch,{'choices':[{'message':{'content':json.dumps(decision)}}]})
+    with pytest.raises(p.ProviderError):p.Planner({'OPENAI_API_KEY':'test'}).plan('q',{}, {},2)

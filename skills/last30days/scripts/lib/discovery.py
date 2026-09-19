@@ -28,13 +28,9 @@ class Config:
     exclude: tuple[str, ...] = ()
     language: str | None = None
     min_engagement: int = 0
-    target: int = 20
-    max_rounds: int = 5
     queries_per_round: int = 3
-    timeout: float = 300
-    max_calls: int = 150
-    max_searches: int = 15
-    patience: int = 2
+    request_timeout: float = 60
+    search_timeout: float = 180
     accept_threshold: float = 0.8
     reject_threshold: float = 0.2
     evidence_threshold: float = 0.8
@@ -45,15 +41,7 @@ class Config:
         if not self.sources or not set(self.sources) <= SOURCES:
             raise ValueError("unsupported sources")
         date.fromisoformat(self.as_of)
-        for name in (
-            "days",
-            "target",
-            "max_rounds",
-            "queries_per_round",
-            "max_calls",
-            "max_searches",
-            "patience",
-        ):
+        for name in ("days", "queries_per_round"):
             value = getattr(self, name)
             if type(value) is not int or not 1 <= value <= 10000:
                 raise ValueError(f"{name} must be a positive integer <= 10000")
@@ -61,8 +49,10 @@ class Config:
             raise ValueError("at most 3 queries per round and 365 days supported")
         if type(self.min_engagement) is not int or self.min_engagement < 0:
             raise ValueError("min_engagement must be nonnegative")
-        if not math.isfinite(self.timeout) or not 0 < self.timeout <= 86400:
-            raise ValueError("timeout must be finite and within 86400 seconds")
+        for name in ("request_timeout", "search_timeout"):
+            value = getattr(self, name)
+            if not math.isfinite(value) or not 0 < value <= 86400:
+                raise ValueError(f"{name} must be finite and within 86400 seconds")
         thresholds = (
             self.reject_threshold,
             self.accept_threshold,
@@ -235,18 +225,24 @@ def run(
     clock=time.monotonic,
     progress=None,
 ):
-    """Persist every charged call and judgement; resume keeps budgets and original criteria."""
+    """Run until the planner declares coverage complete; checkpoints preserve all evidence."""
+    from collections import Counter
+
     config_dict = json.loads(json.dumps(asdict(config)))
     output = Path(output)
     if resume:
         state = json.loads(output.read_text())
-        if state.get("schema_version") != 1 or state.get("config") != config_dict:
+        if not isinstance(state, dict) or state.get("schema_version") != 2:
+            raise ValueError(
+                "unsupported checkpoint version; start a new discovery run"
+            )
+        if state.get("config") != config_dict:
             raise ValueError("resume configuration differs from checkpoint")
     else:
         if output.exists():
             raise ValueError("output exists; use --resume or choose another path")
         state = {
-            "schema_version": 1,
+            "schema_version": 2,
             "config": config_dict,
             "criteria": config.criteria(),
             "created_at": datetime.now(UTC).isoformat(),
@@ -256,107 +252,131 @@ def run(
             "calls": 0,
             "searches": 0,
             "elapsed_seconds": 0,
-            "empty_rounds": 0,
+            "planner_decisions": [],
             "stop_reason": None,
         }
     started = clock()
     previous_elapsed = state["elapsed_seconds"]
     state["stop_reason"] = None
     state.pop("error", None)
+    state.pop("completion_reason", None)
 
     def save():
         state["elapsed_seconds"] = previous_elapsed + max(0, clock() - started)
         checkpoint(output, state)
 
-    def remaining():
-        left = config.timeout - previous_elapsed - (clock() - started)
-        if left <= 0:
-            raise Stop("deadline")
-        return left
-
     def charge(kind):
-        left = remaining()
-        if state["calls"] >= config.max_calls:
-            raise Stop("call_limit")
-        if kind == "search" and state["searches"] >= config.max_searches:
-            raise Stop("search_limit")
         state["calls"] += 1
         if kind == "search":
             state["searches"] += 1
         save()
-        return left
+        return config.search_timeout if kind == "search" else config.request_timeout
 
     def emit(event):
         if progress:
             progress(event)
 
-    def target():
-        if len(state["accepted"]) >= config.target:
-            raise Stop("target_reached")
-
     def feedback():
-        examples = []
-        for value in list(state["candidates"].values())[-30:]:
-            if value["decision"] != "pending":
-                examples.append(
-                    {
-                        "title": value["item"].get("title", "")[:250],
-                        "body": value["item"].get("body", "")[:1000],
-                        "decision": value["decision"],
-                        "probabilities": value.get("judgement", {}).get(
-                            "probabilities", {}
-                        ),
-                        "filter_reason": value.get("filter_reason"),
-                    }
-                )
+        # Bound the context, not the investigation. The planner maintains a rolling
+        # coverage assessment; complete evidence and query history stay in the checkpoint.
+        values = list(state["candidates"].values())
+        selected = []
+        for decision in ("accepted", "rejected", "uncertain", "filtered"):
+            group = [v for v in values if v["decision"] == decision]
+            if decision == "accepted" and len(group) > 10:
+                group = [group[i * (len(group) - 1) // 9] for i in range(10)]
+            else:
+                group = group[-10:]
+            selected.extend(group)
+        examples = [
+            {
+                "title": v["item"].get("title", "")[:250],
+                "body": v["item"].get("body", "")[:1000],
+                "url": v["item"].get("url"),
+                "source": v["item"].get("source"),
+                "decision": v["decision"],
+                "probabilities": v.get("judgement", {}).get("probabilities", {}),
+                "filter_reason": v.get("filter_reason"),
+            }
+            for v in selected
+        ]
+        queries = [q["query"] for r in state["rounds"] for q in r["queries"]]
         return {
-            "queries": [q["query"] for r in state["rounds"] for q in r["queries"]],
+            "queries": queries[-100:],
+            "total_queries": len(queries),
             "accepted_count": len(state["accepted"]),
-            "target": config.target,
             "examples": examples,
+            "decision_counts": dict(Counter(v["decision"] for v in values)),
+            "source_counts": dict(Counter(v["item"]["source"] for v in values)),
             "queries_requested": config.queries_per_round,
+            "previous_assessment": state["planner_decisions"][-1]
+            if state["planner_decisions"]
+            else None,
             "rounds": [
                 {
+                    "number": r["number"],
                     "new_accepted": r.get("new_accepted"),
+                    "new_candidates": r.get("new_candidates"),
+                    "duplicate_candidates": r.get("duplicate_candidates", 0),
                     "source_status": [q.get("source_status", {}) for q in r["queries"]],
                 }
-                for r in state["rounds"]
+                for r in state["rounds"][-20:]
             ],
+            "context_note": "Examples are sampled, with the last 100 queries and 20 rounds. Preserve earlier coverage and gaps in coverage_summary.",
         }
 
     save()
     try:
         while True:
-            target()
-            remaining()
             active = (
                 state["rounds"][-1]
                 if state["rounds"] and not state["rounds"][-1]["complete"]
                 else None
             )
             if active is None:
-                if state["empty_rounds"] >= config.patience:
-                    raise Stop("saturated")
-                if len(state["rounds"]) >= config.max_rounds:
-                    raise Stop("max_rounds")
-                # Do not pay a planner when no retrieval budget remains.
-                if state["searches"] >= config.max_searches:
-                    raise Stop("search_limit")
-                ctx = feedback()
-                queries = planner.plan(
-                    config.objective, config.filters(), ctx, charge("planner")
+                assessment = planner.plan(
+                    config.objective, config.filters(), feedback(), charge("planner")
                 )
-                remaining()
-                used = {q.casefold().strip() for q in ctx["queries"]}
+                # The provider validates structure; also guard injected planner implementations.
+                if (
+                    not isinstance(assessment, dict)
+                    or assessment.get("action") not in ("search", "stop")
+                    or not isinstance(assessment.get("reason"), str)
+                    or not assessment["reason"].strip()
+                    or not isinstance(assessment.get("coverage_summary"), str)
+                    or not isinstance(assessment.get("queries"), list)
+                ):
+                    raise ValueError("invalid planner assessment")
+                if assessment["action"] == "stop":
+                    if assessment["queries"]:
+                        raise ValueError("stop assessment must not contain queries")
+                    state["planner_decisions"].append(assessment)
+                    state["completion_reason"] = assessment["reason"]
+                    state["coverage_summary"] = assessment["coverage_summary"]
+                    raise Stop("planner_complete")
+                used = {
+                    q["query"].strip().casefold()
+                    for r in state["rounds"]
+                    for q in r["queries"]
+                }
                 fresh = []
-                for q in queries:
+                skipped = []
+                for q in assessment["queries"]:
                     if not isinstance(q, str) or not q.strip() or len(q) > 500:
                         raise ValueError("invalid planner query")
-                    if q.strip().casefold() not in used:
-                        fresh.append(q.strip())
-                        used.add(q.strip().casefold())
+                    q = q.strip()
+                    if q.casefold() in used:
+                        skipped.append(q)
+                    else:
+                        fresh.append(q)
+                        used.add(q.casefold())
+                assessment = dict(assessment, skipped_queries=skipped)
+                state["planner_decisions"].append(assessment)
+                state["coverage_summary"] = assessment["coverage_summary"]
+                save()
                 if not fresh:
-                    raise Stop("no_new_queries")
+                    # Repetition is feedback for the LLM, never an automatic finish.
+                    continue
                 active = {
                     "number": len(state["rounds"]) + 1,
                     "queries": [
@@ -364,6 +384,8 @@ def run(
                         for q in fresh[: config.queries_per_round]
                     ],
                     "accepted_before": len(state["accepted"]),
+                    "candidates_before": len(state["candidates"]),
+                    "duplicate_candidates": 0,
                     "complete": False,
                 }
                 state["rounds"].append(active)
@@ -392,6 +414,7 @@ def run(
                         except (KeyError, ValueError, TypeError):
                             continue
                         if identity in state["candidates"]:
+                            active["duplicate_candidates"] += 1
                             continue
                         reason = filter_reason(item, config)
                         state["candidates"][identity] = {
@@ -405,7 +428,6 @@ def run(
                     query["fetched"] = True
                     save()
                 for identity in query["ids"]:
-                    target()
                     entry = state["candidates"][identity]
                     if entry["decision"] != "pending":
                         continue
@@ -415,7 +437,6 @@ def run(
                         entry["item"],
                         charge("jev"),
                     )
-                    remaining()
                     entry["decision"] = decide(
                         judgement, config, len(config.criteria())
                     )
@@ -432,7 +453,6 @@ def run(
                             "url": entry["item"]["url"],
                         }
                     )
-                target()
                 if not query["healthy"]:
                     query["fetched"] = False
                     save()
@@ -441,8 +461,8 @@ def run(
                 save()
             active["complete"] = True
             active["new_accepted"] = len(state["accepted"]) - active["accepted_before"]
-            state["empty_rounds"] = (
-                state["empty_rounds"] + 1 if active["new_accepted"] == 0 else 0
+            active["new_candidates"] = (
+                len(state["candidates"]) - active["candidates_before"]
             )
             save()
     except Stop as exc:
@@ -450,21 +470,12 @@ def run(
     except KeyboardInterrupt:
         state["stop_reason"] = "cancelled"
     except (TimeoutError, subprocess.TimeoutExpired):
-        state["stop_reason"] = (
-            "deadline"
-            if config.timeout - previous_elapsed - (clock() - started) <= 0
-            else "provider_failure"
-        )
-        state["error"] = "operation timed out"
+        state["stop_reason"] = "provider_failure"
+        state["error"] = "operation timed out; investigation incomplete"
     except Exception as exc:  # noqa: BLE001 - checkpoint and sanitize provider boundaries
-        # Provider/search errors can include headers, URLs or response bodies. Never persist those.
-        state["stop_reason"] = (
-            "deadline"
-            if config.timeout - previous_elapsed - (clock() - started) <= 0
-            else "provider_failure"
-        )
         from .discovery_providers import ProviderError
 
+        state["stop_reason"] = "provider_failure"
         state["error"] = (
             str(exc)
             if isinstance(exc, ProviderError)

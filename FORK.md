@@ -32,7 +32,7 @@ fallback in the ordinary X chain. Existing host-specific policies remain intact.
 
 ```text
 /last30days find developers who tried an AI coding tool and want an alternative;
-only firsthand problems, exclude self-promotion, English, find 20
+only firsthand problems, exclude self-promotion, English
 ```
 
 The planner generates queries, the original engine retrieves candidates, and Jev
@@ -52,13 +52,20 @@ queries using `DISCOVERY_PLANNER_API_KEY`, `AI_GATEWAY_API_KEY`, or `OPENAI_API_
 Provide discovery model credentials through the process environment; source keys
 retain their existing configuration. Never commit keys.
 
-The loop stops at its target, configured budgets, lack of new queries, consecutive
-successful rounds without new matches, or a failure. Defaults are 20 matches, five
-rounds, 300 seconds, 150 wrapper calls, and 15 engine invocations. Wrapper calls are
-planner + Jev + engine calls, not every underlying HTTP request or a dollar cap.
-The checkpoint preserves evidence, probabilities, uncertain and pending work, source
-statuses, filters, and consumed budgets for resume. Insufficient evidence stays
-uncertain. These limits and judgments do not guarantee exhaustive recall or accuracy.
+The planner decides when the search has covered the objective and further searches
+are unlikely to add unique matches. There are no automatic total match, round,
+request, search, runtime, or empty-round limits, and no dollar cap. Repeated queries
+are skipped and returned as feedback; they do not automatically stop the loop.
+Costs continue until the planner stops, the user cancels, or an operation fails.
+Each planner/Jev operation has a 60-second timeout and each engine invocation a
+180-second timeout; these are operation timeouts, not overall research deadlines.
+
+The checkpoint preserves evidence, probabilities, uncertain and pending work,
+source statuses, criteria, and search history. Successful completion records
+`planner_complete`, a completion reason, and coverage summary. Failures and
+cancellation remain incomplete. Version 1 checkpoints are rejected explicitly
+instead of restoring legacy limits. Insufficient evidence stays uncertain, and
+planner completion does not guarantee exhaustive recall or classification accuracy.
 
 The developer/scripting entrypoint is `skills/last30days/scripts/discover.py`.
 See [the discovery configuration](CONFIGURATION.md#iterative-discovery-with-jev-developiq-fork)
