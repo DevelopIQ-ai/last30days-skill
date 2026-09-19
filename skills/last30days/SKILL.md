@@ -18,6 +18,10 @@ metadata:
         - SCRAPECREATORS_API_KEY
         - OPENAI_API_KEY
         - GETXAPI_KEY
+        - JEV_API_KEY
+        - TYPESAFE_API_KEY
+        - AI_GATEWAY_API_KEY
+        - DISCOVERY_PLANNER_API_KEY
         - XAI_API_KEY
         - X_BEARER_TOKEN
         - OPENROUTER_API_KEY
@@ -67,6 +71,78 @@ metadata:
       - ai-skill
       - clawhub
 ---
+
+## Iterative find mode with Jev (DevelopIQ fork)
+
+**Route explicit `/last30days find <objective>` requests here before the normal
+one-pass flow below.** Also use this route when the user explicitly requests repeated
+searching and Jev evaluation against filters. Ordinary topic research retains the
+existing one-pass behavior. Do not confuse this with `last30days.py --discover`, which
+is the upstream topic-brief workflow. Do not run the normal research pass first.
+
+1. Preserve the user's objective and filters. Translate source/date/minimum-engagement
+   filters to deterministic flags and semantic requirements to repeatable `--include`
+   and `--exclude`; `--language` is also judged by Jev. Do not invent tighter filters or
+   weaken them to fill the target. There are at most six semantic filters including
+   language, in addition to the objective.
+2. Resolve `scripts/discover.py` relative to this installed skill, alongside
+   `scripts/last30days.py`. The discovery entrypoint owns planning, retrieval, Jev
+   evaluation, feedback, deduplication, budgets, and checkpointing; the host need not
+   manually emulate the loop or generate a one-pass `--plan`.
+3. Run with a checkpoint path. Default sources are `x,reddit,hackernews`; supported
+   selections also include `youtube,github,bluesky`. Defaults: 30 days, target 20,
+   five rounds, three queries per round, 300 seconds, 150 wrapper calls, 15 engine
+   invocations, and patience of two successful empty rounds. Respect explicit user
+   budgets. The fixed date window and all filters survive resume.
+4. Return accepted matches with source links and the actual stop reason, plus counts
+   of uncertain/pending candidates and any source failures. Link the checkpoint.
+   Never label budget exhaustion or saturation as exhaustive search. Never claim
+   uncertain matches satisfy the request. A Jev probability is model output, not
+   independently verified accuracy. Empty/garbled evidence is uncertain, not proof
+   that the underlying document fails the criteria.
+5. For an explicit continuation, use `--resume <checkpoint>`; do not silently start
+   over, discard charged calls, or relax the original criteria. A resume retains the
+   original budgets, so exhausted budgets cannot be reset by resuming.
+
+Example user request:
+
+```text
+/last30days find developers who tried an AI coding tool and want an alternative;
+only firsthand problems, exclude self-promotion, English, X and Reddit, find 10
+```
+
+Translate to this **engine scripting form**, using the installed script's real path:
+
+```bash
+python3 scripts/discover.py \
+  "Developers who tried an AI coding tool and want an alternative" \
+  --sources x,reddit --include "Describes a problem they personally experienced" \
+  --exclude "Promotes their own product" --language English \
+  --target 10 --output ./discovery-results.json
+```
+
+The command emits compact output by default; `--emit json` exposes full state. Source
+statuses and per-candidate decisions/probabilities remain in the atomic checkpoint.
+`--accept-threshold 0.8`, `--reject-threshold 0.2`, and `--evidence-threshold 0.8`
+control acceptance; every criterion must pass and evidence must be sufficient.
+`--min-engagement` counts likes/score/points/GitHub stars only, with unknown values failing a
+positive minimum. `--max-calls` counts planner calls, Jev item calls, and engine
+invocations, **not** all provider HTTP requests or dollars.
+
+A separate planner model needs `DISCOVERY_PLANNER_API_KEY`, `AI_GATEWAY_API_KEY`, or
+`OPENAI_API_KEY`. Jev needs `JEV_API_KEY` (or `TYPESAFE_API_KEY`) for native TypeSafe;
+for Gateway use `JEV_PROVIDER=vercel` and `JEV_API_KEY` or `AI_GATEWAY_API_KEY`.
+Provider variables are process environment configuration. Never print credentials.
+If configuration is missing, report the missing provider setup rather than substituting
+host guesses for real Jev evaluation. Retrieval uses existing source credentials and
+disables browser-cookie reads. The wrapper sets `LAST30DAYS_GETXAPI_EXACT_QUERY=1`
+to preserve generated query refinements; embedded date operators still yield to the
+fixed engine date window. The wrapper also sets `LAST30DAYS_SKIP_RUN_CACHE=1`
+to preserve the ordinary shared last-run/report cache across its subqueries.
+GetXAPI retains full provider text; the wrapper records
+any truncation at its 24,000-character candidate-body cap. No Trigger, Supabase, or
+hosted worker is required.
+See `CONFIGURATION.md` in this fork for all flags and provider override defaults.
 
 ## GetXAPI backend (DevelopIQ fork)
 

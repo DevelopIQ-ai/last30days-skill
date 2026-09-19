@@ -1,7 +1,8 @@
-# Last 30 Days + GetXAPI
+# Last 30 Days + GetXAPI + Jev
 
 This fork of [Matt Van Horn’s Last 30 Days](https://github.com/mvanhorn/last30days-skill)
-adds GetXAPI as an X search backend. It keeps the original skill and other sources.
+adds GetXAPI as an X search backend and an iterative discovery loop with Jev.
+It keeps the original one-pass skill and other sources.
 No Pixie application, database, or job infrastructure is required.
 
 ## Install
@@ -26,6 +27,43 @@ Results include source links, timestamps, and engagement. Searches paginate with
 a bounded budget, deduplicate posts, and preserve partial results on failures.
 Requests use GetXAPI credits. Without an explicit backend pin, GetXAPI is the last
 fallback in the ordinary X chain. Existing host-specific policies remain intact.
+
+## Find matches with Jev
+
+```text
+/last30days find developers who tried an AI coding tool and want an alternative;
+only firsthand problems, exclude self-promotion, English, find 20
+```
+
+The planner generates queries, the original engine retrieves candidates, and Jev
+checks each candidate against the objective and filters. Decisions feed the next
+round of queries. Matches accumulate without repeatedly judging duplicate URLs.
+GetXAPI receives the planner’s exact query instead of reducing it to topic keywords;
+the engine still enforces the fixed date window. Full provider text is retained
+before the wrapper’s explicit candidate-body cap. Minimum engagement can filter
+likes, scores, points, or GitHub stars.
+Ordinary `/last30days <topic>` still performs the original research pass.
+Discovery sets `LAST30DAYS_SKIP_RUN_CACHE=1` for child engines, preserving the
+shared last-run/report cache used by ordinary research follow-ups.
+
+Configure native Jev with `JEV_API_KEY` or `TYPESAFE_API_KEY`, or use
+`JEV_PROVIDER=vercel` with `AI_GATEWAY_API_KEY`. A separate general model plans
+queries using `DISCOVERY_PLANNER_API_KEY`, `AI_GATEWAY_API_KEY`, or `OPENAI_API_KEY`.
+Provide discovery model credentials through the process environment; source keys
+retain their existing configuration. Never commit keys.
+
+The loop stops at its target, configured budgets, lack of new queries, consecutive
+successful rounds without new matches, or a failure. Defaults are 20 matches, five
+rounds, 300 seconds, 150 wrapper calls, and 15 engine invocations. Wrapper calls are
+planner + Jev + engine calls, not every underlying HTTP request or a dollar cap.
+The checkpoint preserves evidence, probabilities, uncertain and pending work, source
+statuses, filters, and consumed budgets for resume. Insufficient evidence stays
+uncertain. These limits and judgments do not guarantee exhaustive recall or accuracy.
+
+The developer/scripting entrypoint is `skills/last30days/scripts/discover.py`.
+See [the discovery configuration](CONFIGURATION.md#iterative-discovery-with-jev-developiq-fork)
+for flags, thresholds, credentials, and resume behavior. Reinstall the skill after
+updating this fork: installed copies do not automatically track checkout edits.
 
 ## Verification
 

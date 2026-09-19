@@ -100,3 +100,19 @@ def test_engine_end_date_includes_today():
         result = getxapi.search_x('agents', '2026-08-19', '2026-09-18', token='dummy')
     assert len(result['items']) == 1
     assert 'until:2026-09-19' in parse_qs(urlparse(call.call_args.args[0]).query)['q'][0]
+
+
+def test_discovery_exact_query_does_not_collapse_refinements(monkeypatch):
+    monkeypatch.setenv('LAST30DAYS_GETXAPI_EXACT_QUERY','1')
+    q='Jev TypeSafe built router experiment measured latency'
+    with patch.object(http,'get',return_value={'tweets':[],'has_more':False}) as request:
+        getxapi.search_x(q,'2026-08-19','2026-09-19',depth='quick',token='dummy')
+    sent=parse_qs(urlparse(request.call_args.args[0]).query)['q'][0]
+    assert sent==q+' since:2026-08-19 until:2026-09-20'
+
+
+def test_preserve_full_getxapi_post_text():
+    post=tweet(); post['text']='Intro. '*100+'I built a Jev router with 200ms latency.'
+    with patch.object(http,'get',return_value={'tweets':[post],'has_more':False}):
+        result=getxapi.search_x('Jev','2026-08-19','2026-09-19',depth='quick',token='dummy')
+    assert result['items'][0]['text']==post['text']

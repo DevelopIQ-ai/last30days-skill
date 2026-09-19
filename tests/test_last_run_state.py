@@ -75,6 +75,20 @@ def _diag() -> dict[str, object]:
 
 
 class LastRunStateTests(unittest.TestCase):
+    def test_skip_run_cache_preserves_existing_reports(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            config_dir = Path(tmp)
+            with mock.patch.object(cli.env, "CONFIG_DIR", config_dir), mock.patch.dict(
+                os.environ, {"LAST30DAYS_SKIP_RUN_CACHE": "0"}
+            ):
+                self.assertTrue(cli._write_last_run("Original", _report("Original")))
+                paths = [config_dir / "last-run.json", config_dir / "last-report.json"]
+                original = {path: path.read_bytes() for path in paths}
+                with mock.patch.dict(os.environ, {"LAST30DAYS_SKIP_RUN_CACHE": "1"}):
+                    result = cli._write_last_run("Discovery query", _report("Discovery query"))
+                self.assertEqual(original, {path: path.read_bytes() for path in paths})
+                self.assertFalse(result)
+
     def test_empty_config_override_disables_last_run_write(self):
         with tempfile.TemporaryDirectory() as tmp:
             home = Path(tmp) / "home"

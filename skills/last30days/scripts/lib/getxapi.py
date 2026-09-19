@@ -1,6 +1,7 @@
 """GetXAPI public X search. Requires GETXAPI_KEY, never an X session cookie."""
 from __future__ import annotations
 
+import os
 import re
 from datetime import date, timedelta
 from urllib.parse import urlencode
@@ -52,6 +53,9 @@ def _search(query, from_date, to_date, token, limit, topic, prefix="GX"):
             if item and (not item['date'] or from_date <= item['date'] <= to_date):
                 seen_ids.add(post_id)
                 item['post_id'] = post_id
+                # The shared Xquik parser truncates to 500 characters. Jev needs
+                # all returned evidence; downstream consumers bound their own input.
+                item['text'] = str(tweet.get('text') or '').strip()
                 items.append(item)
             if len(items) >= limit:
                 return items, None
@@ -70,7 +74,8 @@ def search_x(topic, from_date, to_date, depth="default", token=""):
         return {"items": [], "error": "No GETXAPI_KEY configured"}
     cfg = xquik.DEPTH_CONFIG.get(depth, xquik.DEPTH_CONFIG["default"])
     items, seen, errors = [], set(), []
-    for query in xquik.expand_xquik_queries(topic, depth):
+    queries = [topic] if os.environ.get('LAST30DAYS_GETXAPI_EXACT_QUERY') == '1' else xquik.expand_xquik_queries(topic, depth)
+    for query in queries:
         found, error = _search(query, from_date, to_date, token, cfg['limit'], topic)
         for item in found:
             if item['post_id'] not in seen:

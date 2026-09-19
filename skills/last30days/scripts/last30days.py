@@ -1298,6 +1298,9 @@ def _write_last_run(
 ) -> bool:
     # ``x_envelope_sha256`` binds the cached report to the --x-posts file it
     # was built from; _load_last_report_cache misses on any mismatch.
+    # Discovery subqueries must not replace the user's ordinary research cache.
+    if os.environ.get("LAST30DAYS_SKIP_RUN_CACHE") == "1":
+        return False
     try:
         if env.CONFIG_DIR is None:
             return False
