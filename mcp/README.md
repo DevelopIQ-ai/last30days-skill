@@ -35,6 +35,34 @@ printing-press bundle . --skip-build --binary build/last30days-pp-mcp
 
 The output `.mcpb` lands at `build/last30days-pp-mcp-<os>-<arch>.mcpb`. Drag it into Claude Desktop's Extensions panel to install.
 
+## Running a local build
+
+To use the server from an MCP host without packaging a `.mcpb`, build it somewhere on
+your PATH and register it:
+
+```bash
+# From mcp/. sync-engine.sh must run first: it mirrors the Python engine and the
+# plugin manifest into vendored/, and the build embeds whatever is there.
+bash scripts/sync-engine.sh
+go build -ldflags "-X main.Version=$(grep -m1 '^version' ../pyproject.toml | cut -d'"' -f2)" \
+  -o ~/.local/bin/last30days-mcp ./cmd/last30days-pp-mcp
+
+claude mcp add last30days --scope user -- ~/.local/bin/last30days-mcp
+```
+
+A local build does **not** track the repository — rerun both commands above after
+pulling. The binary keeps serving the engine it embedded at build time.
+
+Two things are easy to get wrong:
+
+- **Skipping `sync-engine.sh`.** The build still succeeds (the embed is anchored by a
+  `.gitkeep`), and every tool then fails at runtime with `last30days.py not found in
+  cache`.
+- **A stale extraction.** The engine is unpacked into a per-user cache namespaced by
+  `main.Version`. Rebuilding with the same version string does not re-extract, so a
+  cache written by an earlier build wins. Clear it when iterating:
+  `rm -rf ~/Library/Caches/last30days-pp-mcp/<version>`.
+
 ## Runtime requirements
 
 End users need Python 3.12+ on PATH. The bundle ships the engine source but relies on the host interpreter.
