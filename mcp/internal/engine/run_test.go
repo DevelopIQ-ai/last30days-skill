@@ -260,12 +260,83 @@ func TestResolvePythonAcceptsAbsolutePATH(t *testing.T) {
 	}
 	dir := t.TempDir()
 	want := filepath.Join(dir, DefaultPythonBinary)
-	if err := os.WriteFile(want, []byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil {
+	// The stub has to answer the version probe: resolvePython no longer
+	// trusts a binary just because it is named python3, because on macOS
+	// that name is usually the system 3.9 the engine refuses.
+	if err := os.WriteFile(want, []byte("#!/bin/sh\necho 3.12\n"), 0o755); err != nil {
 		t.Fatal(err)
 	}
 	t.Setenv("PATH", dir)
+	t.Setenv(PythonEnvOverride, "")
 	if path, err := resolvePython(""); err != nil || path != want {
 		t.Fatalf("resolvePython = %q, %v; want %q", path, err, want)
+	}
+}
+
+func TestResolvePythonPrefersTheEnvOverride(t *testing.T) {
+	t.Setenv(PythonEnvOverride, "/somewhere/python3.13")
+	path, err := resolvePython("")
+	if err != nil || path != "/somewhere/python3.13" {
+		t.Fatalf("resolvePython = %q, %v; want the pinned interpreter", path, err)
+	}
+}
+
+func TestResolvePythonRejectsAnOldInterpreter(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("POSIX executable fixture")
+	}
+	dir := t.TempDir()
+	stub := filepath.Join(dir, DefaultPythonBinary)
+	// This is the real macOS situation: python3 exists and works, but is 3.9.
+	if err := os.WriteFile(stub, []byte("#!/bin/sh\necho 3.9\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", dir)
+	t.Setenv(PythonEnvOverride, "")
+	path, err := resolvePython("")
+	if err == nil {
+		t.Fatalf("resolvePython accepted 3.9 and returned %q", path)
+	}
+	// The error has to name the version found and the way out, or the user
+	// is left guessing why a working python3 was refused.
+	for _, want := range []string{"3.9", PythonEnvOverride, MinPythonVersion} {
+		if !strings.Contains(err.Error(), want) {
+			t.Fatalf("error should mention %q: %v", want, err)
+		}
+	}
+}
+
+func TestResolvePythonFallsBackToAVersionedName(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("POSIX executable fixture")
+	}
+	dir := t.TempDir()
+	old := filepath.Join(dir, "python3")
+	if err := os.WriteFile(old, []byte("#!/bin/sh\necho 3.9\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	newer := filepath.Join(dir, "python3.13")
+	if err := os.WriteFile(newer, []byte("#!/bin/sh\necho 3.13\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", dir)
+	t.Setenv(PythonEnvOverride, "")
+	path, err := resolvePython("")
+	if err != nil || path != newer {
+		t.Fatalf("resolvePython = %q, %v; want %q", path, err, newer)
+	}
+}
+
+func TestVersionAtLeastMinComparesNumerically(t *testing.T) {
+	// 3.9 > 3.12 as strings; the whole point is that it is not.
+	cases := map[string]bool{
+		"3.9": false, "3.11": false, "3.12": true, "3.13": true,
+		"3.14": true, "4.0": true, "2.7": false, "": false, "garbage": false,
+	}
+	for version, want := range cases {
+		if got := versionAtLeastMin(version); got != want {
+			t.Fatalf("versionAtLeastMin(%q) = %v, want %v", version, got, want)
+		}
 	}
 }
 
