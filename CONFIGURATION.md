@@ -59,7 +59,7 @@ evidence, not instructions. No database, hosted worker, Trigger, or Supabase is 
 | `--search-timeout` | `180` | Timeout in seconds for one engine invocation, not total runtime |
 | `--accept-threshold`, `--reject-threshold` | `0.8`, `0.2` | Accept only when every criterion reaches the acceptance threshold; reject when any criterion reaches or falls below the rejection threshold, provided evidence is sufficient |
 | `--evidence-threshold` | `0.8` | Evidence sufficiency must meet this threshold; otherwise keep the candidate uncertain even if a criterion received a confident “no” |
-| `--output` | `~/Documents/Last30Days/discovery/<UTC-timestamp>-<id>.json` | JSON checkpoint containing results and run state; existing files require `--resume` |
+| `--output` | `LAST30DAYS_MEMORY_DIR/discovery/<UTC-timestamp>-<id>.json` (defaults to `~/Documents/Last30Days` when unset) | JSON checkpoint containing results and run state; existing files require `--resume` |
 | `--resume` | none | Resume a version 2 checkpoint with its original configuration, history, and pending work |
 | `--emit` | `compact` | `compact` summary or `json` state |
 

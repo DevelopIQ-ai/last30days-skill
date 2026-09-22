@@ -66,7 +66,12 @@ def test_readme_translations_preserve_structure_and_commands() -> None:
         text = path.read_text(encoding="utf-8")
         lines = text.splitlines()
         assert lines[0] == "# /last30days"
-        assert lines[2] == _navigation(label)
+        # Find the navigation row rather than pinning it to a line number:
+        # a banner above it (the fork notice) is not a structural regression,
+        # a missing or non-reciprocal row is.
+        nav = _navigation(label)
+        assert nav in lines, f"{label}: reciprocal navigation row missing or altered"
+        assert lines.index(nav) <= 6, f"{label}: navigation row drifted from the header"
         assert text.count("```") == expected_code_fences
         assert _code_commands(text) == expected_code_commands
         assert _external_link_targets(text) == expected_external_links

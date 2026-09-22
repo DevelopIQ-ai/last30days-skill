@@ -7,6 +7,7 @@ name. The third is not redundant with the second -- most discussion never
 """
 
 import inspect
+import re
 
 import pytest
 
@@ -18,12 +19,21 @@ def _supplements_source():
 
 
 def test_grok_is_handle_lane_capable():
+    """Match the capable *set*, not a literal tuple.
+
+    Asserting the exact source text broke the moment a new handle-capable
+    backend (getxapi) was added -- a correct change the guard flagged as a
+    regression. What actually matters is that none of these four drops out.
+    """
     src = _supplements_source()
-    assert '("grok", "bird", "xapi", "xquik")' in src, (
+    found = re.search(r"primary = next\(\(b for b in chain if b in \(([^)]*)\)", src)
+    assert found, "handle-capable backend set not found in _run_supplemental_searches"
+    capable = set(re.findall(r'"(\w+)"', found.group(1)))
+    assert {"grok", "bird", "xapi", "xquik"} <= capable, (
         "grok supports from:/@ natively; leaving it out of the capable set "
         "silently drops all of Phase 2 for grok users, as it already does for "
         "xai and xurl. xapi (X API v2 bearer) runs the same lanes, after "
-        "bird and before xquik (R7)."
+        f"bird and before xquik (R7). Found: {sorted(capable)}"
     )
 
 
@@ -32,7 +42,11 @@ def test_xapi_lane_branch_sits_between_bird_and_xquik():
     grok = src.index('if primary == "grok":')
     bird = src.index('elif primary == "bird":')
     xapi = src.index('elif primary == "xapi":')
-    xquik = src.index('elif primary == "xquik":')
+    # The xquik branch now also serves getxapi ("elif primary in (...)"), so
+    # match however the branch is spelled rather than one exact form.
+    xquik_branch = re.search(r'elif primary (?:==|in) \(?"xquik"', src)
+    assert xquik_branch, "xquik lane branch not found"
+    xquik = xquik_branch.start()
     assert grok < bird < xapi < xquik
     xapi_block = src[xapi:xquik]
     assert "x_api.search_handles" in xapi_block
