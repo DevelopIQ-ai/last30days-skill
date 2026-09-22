@@ -36,6 +36,19 @@ const DefaultTimeout = 5 * time.Minute
 // (seconds, integer). Honored by Run when RunOptions.Timeout is zero.
 const TimeoutEnvOverride = "LAST30DAYS_MCP_TIMEOUT"
 
+// PythonEnvOverride pins the interpreter explicitly. Same variable the
+// engine's shell surfaces honor, so setting it once covers both.
+const PythonEnvOverride = "LAST30DAYS_PYTHON"
+
+// PythonCandidates is the discovery order when nothing is pinned. "python3"
+// comes first so a correctly-configured host pays no extra cost; the
+// versioned names follow because on macOS "python3" is usually the system
+// 3.9, which the engine refuses.
+var PythonCandidates = []string{"python3", "python3.14", "python3.13", "python3.12"}
+
+// pythonProbeTimeout bounds each "what version are you" call.
+const pythonProbeTimeout = 5 * time.Second
+
 // RunOptions configures one invocation of the embedded Python engine.
 // PythonPath is exposed so tests can substitute a stub interpreter without
 // manipulating the process PATH.
@@ -120,16 +133,95 @@ func resolvePython(override string) (string, error) {
 	if override != "" {
 		return override, nil
 	}
-	path, err := exec.LookPath(DefaultPythonBinary)
-	// Go normally rejects relative results with ErrDot. Keep this invariant
-	// even when that protection is disabled with GODEBUG=execerrdot=0.
-	if err == nil && filepath.IsAbs(path) {
-		return path, nil
+	// An explicit interpreter always wins. The engine's own shell surfaces
+	// read the same variable (${LAST30DAYS_PYTHON:-python3}), so a host that
+	// already sets it for the skill gets the MCP server working for free.
+	if pinned := strings.TrimSpace(os.Getenv(PythonEnvOverride)); pinned != "" {
+		return pinned, nil
+	}
+
+	// Plain "python3" is the system interpreter on macOS, which is far older
+	// than the engine supports. Rather than fail on it, fall through to the
+	// versioned names Homebrew and python.org install alongside it.
+	var rejected []string
+	for _, name := range PythonCandidates {
+		path, err := exec.LookPath(name)
+		// Go normally rejects relative results with ErrDot. Keep this
+		// invariant even when that protection is disabled with
+		// GODEBUG=execerrdot=0.
+		if err != nil || !filepath.IsAbs(path) {
+			continue
+		}
+		version, err := pythonVersion(path)
+		if err != nil {
+			continue
+		}
+		if versionAtLeastMin(version) {
+			return path, nil
+		}
+		rejected = append(rejected, fmt.Sprintf("%s is %s", path, version))
+	}
+
+	detail := "none found on PATH"
+	if len(rejected) > 0 {
+		detail = strings.Join(rejected, "; ")
 	}
 	return "", fmt.Errorf(
-		"engine: %s not found on PATH (need Python %s+, install from %s; current GOOS=%s)",
-		DefaultPythonBinary, MinPythonVersion, PythonInstallURL, runtime.GOOS,
+		"engine: no Python %s+ interpreter found (%s). Install one (%s) or point %s at it, e.g. %s=/opt/homebrew/bin/python3.12; tried %s; current GOOS=%s",
+		MinPythonVersion, detail, PythonInstallURL, PythonEnvOverride,
+		PythonEnvOverride, strings.Join(PythonCandidates, ", "), runtime.GOOS,
 	)
+}
+
+// pythonVersion asks an interpreter for its own "major.minor". Parsing the
+// binary's name is not enough: "python3" can be anything, which is the whole
+// reason this lookup exists.
+func pythonVersion(path string) (string, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), pythonProbeTimeout)
+	defer cancel()
+	out, err := exec.CommandContext(ctx, path, "-c",
+		"import sys; print('%d.%d' % sys.version_info[:2])").Output()
+	if err != nil {
+		return "", err
+	}
+	version := strings.TrimSpace(string(out))
+	if version == "" {
+		return "", fmt.Errorf("engine: %s reported no version", path)
+	}
+	return version, nil
+}
+
+// versionAtLeastMin compares a "major.minor" string against MinPythonVersion
+// numerically, so 3.10 sorts above 3.9 the way a string compare would not.
+func versionAtLeastMin(version string) bool {
+	major, minor, ok := splitMajorMinor(version)
+	if !ok {
+		return false
+	}
+	wantMajor, wantMinor, ok := splitMajorMinor(MinPythonVersion)
+	if !ok {
+		return false
+	}
+	if major != wantMajor {
+		return major > wantMajor
+	}
+	return minor >= wantMinor
+}
+
+func splitMajorMinor(version string) (int, int, bool) {
+	parts := strings.SplitN(version, ".", 3)
+	if len(parts) < 2 {
+		return 0, 0, false
+	}
+	major, err := strconv.Atoi(parts[0])
+	if err != nil {
+		return 0, 0, false
+	}
+	minor, err := strconv.Atoi(parts[1])
+	if err != nil {
+		return 0, 0, false
+	}
+	return major, minor, true
 }
 
 func resolveTimeout(explicit time.Duration) time.Duration {

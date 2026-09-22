@@ -1,0 +1,3 @@
+Fix the MCP server refusing to run on a stock macOS install. It resolved the interpreter by taking the first `python3` on PATH, which on macOS is the system 3.9 — so every tool failed with "requires Python 3.12+" even when a supported interpreter was installed alongside it.
+
+The server now honors `LAST30DAYS_PYTHON` (the same variable the engine's shell surfaces already read), and otherwise probes each candidate for its actual version, falling back to `python3.14`, `python3.13`, and `python3.12` when `python3` is too old. A binary is no longer trusted because of its name. When nothing suitable is found the error names the versions it did find and how to pin one, instead of claiming `python3` was missing when it was present and working.
