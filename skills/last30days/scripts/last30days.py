@@ -2715,6 +2715,50 @@ DOCTOR_PASSTHROUGH_FLAGS = {
     "--probe",
 }
 
+SETTINGS_PORT_FLAG = "--port"
+SETTINGS_PASSTHROUGH_FLAGS = {
+    "--no-open",
+}
+
+
+def _split_settings_port(extra_argv: list[str]) -> tuple[int | None, list[str]]:
+    """Pull ``--port <n>`` / ``--port=<n>`` out of ``extra_argv``.
+
+    Returns ``(port, remaining)`` with ``port`` None when the flag is absent.
+    ``remaining`` still faces the regular allowlist check, so a typo is
+    rejected rather than silently ignored. Mirrors ``_split_store_key``.
+    """
+    port: int | None = None
+    remaining: list[str] = []
+    i = 0
+    while i < len(extra_argv):
+        arg = extra_argv[i]
+        raw: str | None = None
+        if arg == SETTINGS_PORT_FLAG:
+            if i + 1 < len(extra_argv) and not extra_argv[i + 1].startswith("-"):
+                raw = extra_argv[i + 1]
+                i += 2
+            else:
+                i += 1
+        elif arg.startswith(SETTINGS_PORT_FLAG + "="):
+            raw = arg[len(SETTINGS_PORT_FLAG) + 1:]
+            i += 1
+        else:
+            remaining.append(arg)
+            i += 1
+            continue
+        if raw is not None:
+            try:
+                candidate = int(raw)
+            except ValueError:
+                remaining.append(f"{SETTINGS_PORT_FLAG}={raw}")
+                continue
+            if 0 <= candidate <= 65535:
+                port = candidate
+            else:
+                remaining.append(f"{SETTINGS_PORT_FLAG}={raw}")
+    return port, remaining
+
 
 def _looks_inline_json(value: str) -> bool:
     """True when a --x-posts argument is JSON text rather than a path."""
@@ -2834,6 +2878,19 @@ def _validate_extra_argv(parser: argparse.ArgumentParser, topic: str, extra_argv
                 + f"; supported doctor passthrough flags are {', '.join(sorted(DOCTOR_PASSTHROUGH_FLAGS))}"
             )
         return
+    if topic.lower() == "settings":
+        # --port carries a value token; it is range-checked during the split,
+        # and anything malformed falls through to the allowlist error below.
+        _, extra_argv = _split_settings_port(extra_argv)
+        unsupported = [arg for arg in extra_argv if arg not in SETTINGS_PASSTHROUGH_FLAGS]
+        if unsupported:
+            parser.error(
+                "unsupported settings argument(s): "
+                + ", ".join(unsupported)
+                + "; supported settings passthrough flags are "
+                + f"{', '.join(sorted(SETTINGS_PASSTHROUGH_FLAGS | {SETTINGS_PORT_FLAG}))}"
+            )
+        return
     skill_only = [arg for arg in extra_argv if arg in SKILL_ONLY_FLAGS]
     other_unknown = [arg for arg in extra_argv if arg not in SKILL_ONLY_FLAGS]
     if skill_only:
@@ -2867,9 +2924,12 @@ def _config_policy_for_args(args: argparse.Namespace, topic: str, extra_argv: li
         browser_mode = "off"
     elif (
         args.diagnose or args.preflight or normalized_topic == "doctor"
+        or normalized_topic == "settings"
         or is_library_command or is_queue_command or is_cached_verification
     ):
         # doctor is plan-only like --diagnose: it must never read cookies.
+        # settings reads the same doctor report and only ever writes the
+        # credential the user typed, so it inherits the no-cookie policy.
         # Cache-only freshness verification hits only point APIs (Polymarket,
         # GitHub, StockTwits) - no cookie-backed source, so no Keychain prompt.
         browser_mode = "plan_only"
@@ -3255,6 +3315,17 @@ def _main(
             cached="--cached" in extra_argv,
             postmortem="--postmortem" in extra_argv,
             probe="--probe" in extra_argv,
+        )
+
+    # Settings UI: a loopback-only page over the same doctor report, with the
+    # `setup --store-key` write path behind the key fields.
+    if topic.lower() == "settings":
+        from lib import settings_ui
+        port, _ = _split_settings_port(extra_argv)
+        return settings_ui.serve(
+            config,
+            port=port or 0,
+            open_browser="--no-open" not in extra_argv,
         )
 
     if topic.lower() == "library feed":
