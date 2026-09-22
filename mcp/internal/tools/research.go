@@ -24,6 +24,7 @@ type Config struct {
 // Config so test harnesses can pin a version without touching globals.
 func Register(s *server.MCPServer, cfg Config) {
 	registerPreflightTool(s, cfg)
+	registerSettingsTool(s, cfg)
 	s.AddTool(
 		mcplib.NewTool("research",
 			mcplib.WithDescription(

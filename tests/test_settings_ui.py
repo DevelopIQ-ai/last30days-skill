@@ -329,16 +329,23 @@ class ServerTest(unittest.TestCase):
 
 
 class DispatchTest(unittest.TestCase):
-    def test_port_flag_parsing(self):
+    def test_value_flag_parsing(self):
         import last30days
 
-        self.assertEqual(last30days._split_settings_port(["--port", "9000"]), (9000, []))
-        self.assertEqual(last30days._split_settings_port(["--port=9000"]), (9000, []))
-        self.assertEqual(last30days._split_settings_port(["--no-open"]), (None, ["--no-open"]))
+        split = last30days._split_settings_values
+        self.assertEqual(split(["--port", "9000"]), ({"port": 9000}, []))
+        self.assertEqual(split(["--port=9000"]), ({"port": 9000}, []))
+        self.assertEqual(split(["--timeout", "600"]), ({"timeout": 600}, []))
+        self.assertEqual(
+            split(["--port=8787", "--timeout=600", "--no-open"]),
+            ({"port": 8787, "timeout": 600}, ["--no-open"]),
+        )
+        self.assertEqual(split(["--no-open"]), ({}, ["--no-open"]))
         # Out-of-range and non-numeric values fall through to the allowlist
         # error rather than being silently ignored.
-        self.assertEqual(last30days._split_settings_port(["--port=99999"])[1], ["--port=99999"])
-        self.assertEqual(last30days._split_settings_port(["--port=abc"])[1], ["--port=abc"])
+        self.assertEqual(split(["--port=99999"])[1], ["--port=99999"])
+        self.assertEqual(split(["--port=abc"])[1], ["--port=abc"])
+        self.assertEqual(split(["--timeout=999999"])[1], ["--timeout=999999"])
 
     def test_topic_word_dispatch_is_exact_match(self):
         """`settings` starts the UI; a research topic containing it does not."""

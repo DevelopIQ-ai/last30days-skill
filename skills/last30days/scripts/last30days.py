@@ -2715,49 +2715,66 @@ DOCTOR_PASSTHROUGH_FLAGS = {
     "--probe",
 }
 
-SETTINGS_PORT_FLAG = "--port"
 SETTINGS_PASSTHROUGH_FLAGS = {
     "--no-open",
 }
 
+# Settings passthrough flags that carry a value, with the range each accepts.
+# --timeout is the non-interactive escape hatch: a caller that starts the UI
+# detached (the MCP tool) has no way to stop it, so it asks the server to stop
+# itself. 0 means never, which is what an interactive run wants.
+SETTINGS_VALUE_FLAGS = {
+    "--port": (0, 65535),
+    "--timeout": (0, 86400),
+}
 
-def _split_settings_port(extra_argv: list[str]) -> tuple[int | None, list[str]]:
-    """Pull ``--port <n>`` / ``--port=<n>`` out of ``extra_argv``.
 
-    Returns ``(port, remaining)`` with ``port`` None when the flag is absent.
-    ``remaining`` still faces the regular allowlist check, so a typo is
-    rejected rather than silently ignored. Mirrors ``_split_store_key``.
+def _split_settings_values(extra_argv: list[str]) -> tuple[dict[str, int], list[str]]:
+    """Pull ``--flag <n>`` / ``--flag=<n>`` value flags out of ``extra_argv``.
+
+    Returns ``(values, remaining)`` keyed by flag name without the dashes.
+    A malformed or out-of-range value is pushed back onto ``remaining`` so the
+    caller's allowlist check rejects it loudly instead of silently ignoring a
+    typo. Mirrors ``_split_store_key``.
     """
-    port: int | None = None
+    values: dict[str, int] = {}
     remaining: list[str] = []
     i = 0
     while i < len(extra_argv):
         arg = extra_argv[i]
+        flag = None
         raw: str | None = None
-        if arg == SETTINGS_PORT_FLAG:
+        if arg in SETTINGS_VALUE_FLAGS:
+            flag = arg
             if i + 1 < len(extra_argv) and not extra_argv[i + 1].startswith("-"):
                 raw = extra_argv[i + 1]
                 i += 2
             else:
                 i += 1
-        elif arg.startswith(SETTINGS_PORT_FLAG + "="):
-            raw = arg[len(SETTINGS_PORT_FLAG) + 1:]
-            i += 1
         else:
-            remaining.append(arg)
-            i += 1
-            continue
-        if raw is not None:
-            try:
-                candidate = int(raw)
-            except ValueError:
-                remaining.append(f"{SETTINGS_PORT_FLAG}={raw}")
+            for candidate in SETTINGS_VALUE_FLAGS:
+                if arg.startswith(candidate + "="):
+                    flag = candidate
+                    raw = arg[len(candidate) + 1:]
+                    break
+            if flag is None:
+                remaining.append(arg)
+                i += 1
                 continue
-            if 0 <= candidate <= 65535:
-                port = candidate
-            else:
-                remaining.append(f"{SETTINGS_PORT_FLAG}={raw}")
-    return port, remaining
+            i += 1
+        if raw is None:
+            continue
+        low, high = SETTINGS_VALUE_FLAGS[flag]
+        try:
+            candidate_value = int(raw)
+        except ValueError:
+            remaining.append(f"{flag}={raw}")
+            continue
+        if low <= candidate_value <= high:
+            values[flag.lstrip("-")] = candidate_value
+        else:
+            remaining.append(f"{flag}={raw}")
+    return values, remaining
 
 
 def _looks_inline_json(value: str) -> bool:
@@ -2881,14 +2898,14 @@ def _validate_extra_argv(parser: argparse.ArgumentParser, topic: str, extra_argv
     if topic.lower() == "settings":
         # --port carries a value token; it is range-checked during the split,
         # and anything malformed falls through to the allowlist error below.
-        _, extra_argv = _split_settings_port(extra_argv)
+        _, extra_argv = _split_settings_values(extra_argv)
         unsupported = [arg for arg in extra_argv if arg not in SETTINGS_PASSTHROUGH_FLAGS]
         if unsupported:
             parser.error(
                 "unsupported settings argument(s): "
                 + ", ".join(unsupported)
                 + "; supported settings passthrough flags are "
-                + f"{', '.join(sorted(SETTINGS_PASSTHROUGH_FLAGS | {SETTINGS_PORT_FLAG}))}"
+                + f"{', '.join(sorted(SETTINGS_PASSTHROUGH_FLAGS | set(SETTINGS_VALUE_FLAGS)))}"
             )
         return
     skill_only = [arg for arg in extra_argv if arg in SKILL_ONLY_FLAGS]
@@ -3321,11 +3338,12 @@ def _main(
     # `setup --store-key` write path behind the key fields.
     if topic.lower() == "settings":
         from lib import settings_ui
-        port, _ = _split_settings_port(extra_argv)
+        values, _ = _split_settings_values(extra_argv)
         return settings_ui.serve(
             config,
-            port=port or 0,
+            port=values.get("port", 0),
             open_browser="--no-open" not in extra_argv,
+            idle_timeout=values.get("timeout", 0),
         )
 
     if topic.lower() == "library feed":

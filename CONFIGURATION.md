@@ -624,7 +624,12 @@ hand-editing `.env`.
 python3 skills/last30days/scripts/last30days.py settings              # opens your browser
 python3 skills/last30days/scripts/last30days.py settings --no-open    # print the URL only
 python3 skills/last30days/scripts/last30days.py settings --port 8787  # pin the port
+python3 skills/last30days/scripts/last30days.py settings --timeout 900 # stop after 900s idle
 ```
+
+`--timeout` defaults to 0 (never). It exists for callers that start the page without a
+way to stop it — the MCP `settings` tool passes 900 so a forgotten page does not hold a
+port. Any request resets the clock.
 
 In a harness, ask the agent for it in plain language ("show me my last30days settings",
 "add my ScrapeCreators key") and it will start the server and hand you the URL.

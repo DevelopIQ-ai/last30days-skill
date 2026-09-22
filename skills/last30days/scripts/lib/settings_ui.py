@@ -34,6 +34,7 @@ import os
 import re
 import secrets
 import threading
+import time
 import webbrowser
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -972,6 +973,9 @@ class _Handler(BaseHTTPRequestHandler):
     config: dict[str, Any] = {}
     port: int = 0
     _report: dict[str, Any] | None = None
+    # Monotonic stamp of the last handled request. Only the idle
+    # watchdog reads it; a plain float assignment is atomic enough.
+    last_activity: float = 0.0
     _lock = threading.Lock()
 
     def log_message(self, *args: Any) -> None:  # noqa: D102 - quiet by design
@@ -1041,6 +1045,7 @@ class _Handler(BaseHTTPRequestHandler):
     # ---- routes ---------------------------------------------------------
 
     def do_GET(self) -> None:  # noqa: N802 - stdlib naming
+        _Handler.last_activity = time.monotonic()
         parsed = urlparse(self.path)
         query = parse_qs(parsed.query)
         if not self._host_ok():
@@ -1062,6 +1067,7 @@ class _Handler(BaseHTTPRequestHandler):
         self._json({"error": "not found"}, HTTPStatus.NOT_FOUND)
 
     def do_POST(self) -> None:  # noqa: N802 - stdlib naming
+        _Handler.last_activity = time.monotonic()
         parsed = urlparse(self.path)
         if not self._host_ok() or not self._origin_ok():
             self._json({"error": "rejected origin"}, HTTPStatus.FORBIDDEN)
@@ -1128,8 +1134,17 @@ def serve(
     *,
     port: int = 0,
     open_browser: bool = True,
+    idle_timeout: int = 0,
 ) -> int:
-    """Run the settings UI until interrupted. Returns a process exit code."""
+    """Run the settings UI until interrupted. Returns a process exit code.
+
+    ``idle_timeout`` (seconds, 0 = never) shuts the server down once it has
+    gone that long without handling a request. Interactive use leaves it off
+    -- a page left open all afternoon should still work. It exists for
+    non-interactive callers like the MCP tool, which start the server
+    detached and have no way to stop it afterwards; without a self-imposed
+    deadline every invocation would leak a process holding a port.
+    """
     if env.CONFIG_FILE is None:
         print(
             "[last30days] settings: LAST30DAYS_CONFIG_DIR is set to clean mode, "
@@ -1157,6 +1172,23 @@ def serve(
 
     if open_browser:
         threading.Timer(0.2, lambda: webbrowser.open(url)).start()
+
+    if idle_timeout > 0:
+        _Handler.last_activity = time.monotonic()
+
+        def _watchdog() -> None:
+            # shutdown() must be called from another thread than
+            # serve_forever(), which is why this is not a Timer on the
+            # request path.
+            tick = min(15, max(1, idle_timeout // 4))
+            while True:
+                time.sleep(tick)
+                if time.monotonic() - _Handler.last_activity >= idle_timeout:
+                    httpd.shutdown()
+                    return
+
+        threading.Thread(target=_watchdog, daemon=True).start()
+
     try:
         httpd.serve_forever()
     except KeyboardInterrupt:
