@@ -2715,6 +2715,67 @@ DOCTOR_PASSTHROUGH_FLAGS = {
     "--probe",
 }
 
+SETTINGS_PASSTHROUGH_FLAGS = {
+    "--no-open",
+}
+
+# Settings passthrough flags that carry a value, with the range each accepts.
+# --timeout is the non-interactive escape hatch: a caller that starts the UI
+# detached (the MCP tool) has no way to stop it, so it asks the server to stop
+# itself. 0 means never, which is what an interactive run wants.
+SETTINGS_VALUE_FLAGS = {
+    "--port": (0, 65535),
+    "--timeout": (0, 86400),
+}
+
+
+def _split_settings_values(extra_argv: list[str]) -> tuple[dict[str, int], list[str]]:
+    """Pull ``--flag <n>`` / ``--flag=<n>`` value flags out of ``extra_argv``.
+
+    Returns ``(values, remaining)`` keyed by flag name without the dashes.
+    A malformed or out-of-range value is pushed back onto ``remaining`` so the
+    caller's allowlist check rejects it loudly instead of silently ignoring a
+    typo. Mirrors ``_split_store_key``.
+    """
+    values: dict[str, int] = {}
+    remaining: list[str] = []
+    i = 0
+    while i < len(extra_argv):
+        arg = extra_argv[i]
+        flag = None
+        raw: str | None = None
+        if arg in SETTINGS_VALUE_FLAGS:
+            flag = arg
+            if i + 1 < len(extra_argv) and not extra_argv[i + 1].startswith("-"):
+                raw = extra_argv[i + 1]
+                i += 2
+            else:
+                i += 1
+        else:
+            for candidate in SETTINGS_VALUE_FLAGS:
+                if arg.startswith(candidate + "="):
+                    flag = candidate
+                    raw = arg[len(candidate) + 1:]
+                    break
+            if flag is None:
+                remaining.append(arg)
+                i += 1
+                continue
+            i += 1
+        if raw is None:
+            continue
+        low, high = SETTINGS_VALUE_FLAGS[flag]
+        try:
+            candidate_value = int(raw)
+        except ValueError:
+            remaining.append(f"{flag}={raw}")
+            continue
+        if low <= candidate_value <= high:
+            values[flag.lstrip("-")] = candidate_value
+        else:
+            remaining.append(f"{flag}={raw}")
+    return values, remaining
+
 
 def _looks_inline_json(value: str) -> bool:
     """True when a --x-posts argument is JSON text rather than a path."""
@@ -2834,6 +2895,19 @@ def _validate_extra_argv(parser: argparse.ArgumentParser, topic: str, extra_argv
                 + f"; supported doctor passthrough flags are {', '.join(sorted(DOCTOR_PASSTHROUGH_FLAGS))}"
             )
         return
+    if topic.lower() == "settings":
+        # --port carries a value token; it is range-checked during the split,
+        # and anything malformed falls through to the allowlist error below.
+        _, extra_argv = _split_settings_values(extra_argv)
+        unsupported = [arg for arg in extra_argv if arg not in SETTINGS_PASSTHROUGH_FLAGS]
+        if unsupported:
+            parser.error(
+                "unsupported settings argument(s): "
+                + ", ".join(unsupported)
+                + "; supported settings passthrough flags are "
+                + f"{', '.join(sorted(SETTINGS_PASSTHROUGH_FLAGS | set(SETTINGS_VALUE_FLAGS)))}"
+            )
+        return
     skill_only = [arg for arg in extra_argv if arg in SKILL_ONLY_FLAGS]
     other_unknown = [arg for arg in extra_argv if arg not in SKILL_ONLY_FLAGS]
     if skill_only:
@@ -2867,9 +2941,12 @@ def _config_policy_for_args(args: argparse.Namespace, topic: str, extra_argv: li
         browser_mode = "off"
     elif (
         args.diagnose or args.preflight or normalized_topic == "doctor"
+        or normalized_topic == "settings"
         or is_library_command or is_queue_command or is_cached_verification
     ):
         # doctor is plan-only like --diagnose: it must never read cookies.
+        # settings reads the same doctor report and only ever writes the
+        # credential the user typed, so it inherits the no-cookie policy.
         # Cache-only freshness verification hits only point APIs (Polymarket,
         # GitHub, StockTwits) - no cookie-backed source, so no Keychain prompt.
         browser_mode = "plan_only"
@@ -3255,6 +3332,18 @@ def _main(
             cached="--cached" in extra_argv,
             postmortem="--postmortem" in extra_argv,
             probe="--probe" in extra_argv,
+        )
+
+    # Settings UI: a loopback-only page over the same doctor report, with the
+    # `setup --store-key` write path behind the key fields.
+    if topic.lower() == "settings":
+        from lib import settings_ui
+        values, _ = _split_settings_values(extra_argv)
+        return settings_ui.serve(
+            config,
+            port=values.get("port", 0),
+            open_browser="--no-open" not in extra_argv,
+            idle_timeout=values.get("timeout", 0),
         )
 
     if topic.lower() == "library feed":

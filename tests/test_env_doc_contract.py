@@ -35,6 +35,12 @@ DOC_ONLY_KEYS = {
     "LAST30DAYS_CONFIG_DIR",
     "LAST30DAYS_PASS_PREFIX",
     "LAST30DAYS_SKIP_KEYCHAIN",
+    # Set by discovery into the child engine's process environment and read
+    # back with os.environ (last30days.py's run-cache guard, getxapi's query
+    # expansion). They are deliberately not config keys: a .env entry must not
+    # be able to turn either on for an ordinary research run.
+    "LAST30DAYS_GETXAPI_EXACT_QUERY",
+    "LAST30DAYS_SKIP_RUN_CACHE",
 }
 
 

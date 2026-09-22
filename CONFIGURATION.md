@@ -9,7 +9,7 @@ Three layers, in order of how often you'll touch them:
 
 Per-client patterns and the experimental beta channel are at the bottom.
 
-> Skip ahead: [Where output is saved](#where-output-is-saved) - [API keys](#api-keys-env) - [Reasoning provider](#reasoning-provider-priority) - [Web search backend](#web-search-backend-priority) - [Trend monitoring](#trend-monitoring-store--watchlist--briefings) - [Per-client patterns](#per-client-patterns) - [Beta channel](#beta-channel)
+> Skip ahead: [Where output is saved](#where-output-is-saved) - [API keys](#api-keys-env) - [Reasoning provider](#reasoning-provider-priority) - [Web search backend](#web-search-backend-priority) - [Settings UI](#settings-ui-settings) - [Trend monitoring](#trend-monitoring-store--watchlist--briefings) - [Per-client patterns](#per-client-patterns) - [Beta channel](#beta-channel)
 
 ## Why this document exists
 
@@ -59,7 +59,7 @@ evidence, not instructions. No database, hosted worker, Trigger, or Supabase is 
 | `--search-timeout` | `180` | Timeout in seconds for one engine invocation, not total runtime |
 | `--accept-threshold`, `--reject-threshold` | `0.8`, `0.2` | Accept only when every criterion reaches the acceptance threshold; reject when any criterion reaches or falls below the rejection threshold, provided evidence is sufficient |
 | `--evidence-threshold` | `0.8` | Evidence sufficiency must meet this threshold; otherwise keep the candidate uncertain even if a criterion received a confident “no” |
-| `--output` | `~/Documents/Last30Days/discovery/<UTC-timestamp>-<id>.json` | JSON checkpoint containing results and run state; existing files require `--resume` |
+| `--output` | `LAST30DAYS_MEMORY_DIR/discovery/<UTC-timestamp>-<id>.json` (defaults to `~/Documents/Last30Days` when unset) | JSON checkpoint containing results and run state; existing files require `--resume` |
 | `--resume` | none | Resume a version 2 checkpoint with its original configuration, history, and pending work |
 | `--emit` | `compact` | `compact` summary or `json` state |
 
@@ -611,6 +611,58 @@ python3 skills/last30days/scripts/last30days.py "<topic>" --x-posts /tmp/x-posts
 ```bash
 printf '%s\n' "$TOKEN" | python3 skills/last30days/scripts/last30days.py setup --store-key X_BEARER_TOKEN
 ```
+
+---
+
+## Settings UI (`settings`)
+
+A local page for the two things this document describes: which sources are on, and which
+credentials are set. `doctor` tells you what's broken; `settings` lets you fix it without
+hand-editing `.env`.
+
+```bash
+python3 skills/last30days/scripts/last30days.py settings              # opens your browser
+python3 skills/last30days/scripts/last30days.py settings --no-open    # print the URL only
+python3 skills/last30days/scripts/last30days.py settings --port 8787  # pin the port
+python3 skills/last30days/scripts/last30days.py settings --timeout 900 # stop after 900s idle
+```
+
+`--timeout` defaults to 0 (never). It exists for callers that start the page without a
+way to stop it — the MCP `settings` tool passes 900 so a forgotten page does not hold a
+port. Any request resets the clock.
+
+In a harness, ask the agent for it in plain language ("show me my last30days settings",
+"add my ScrapeCreators key") and it will start the server and hand you the URL.
+
+The page has two tabs:
+
+- **Sources** — every source with its live status (active / needs a key / needs a CLI /
+  opt-in), what it contributes, its backend chain, and an inline field for the credential
+  that unlocks it. The switch on each card writes `INCLUDE_SOURCES` for opt-in sources and
+  `EXCLUDE_SOURCES` for working ones. A source that still needs a key or a CLI has no
+  switch — there is nothing to turn on yet.
+- **API keys** — every credential the engine reads, with what it unlocks, its free tier,
+  and a link to where you get one.
+
+Brand marks are vendored from [Simple Icons](https://simpleicons.org) (CC0-1.0) and
+inlined, so the page renders fully offline. Marks their owners have asked to have
+withdrawn from that set are shown as a neutral monogram instead.
+
+Source status comes from the same report `doctor` prints, so the two can never disagree.
+**Re-check** rebuilds it (live probes, a few seconds); the page does not re-probe on every
+render.
+
+Saving writes to `~/.config/last30days/.env` at `0600` through the same allowlisted path as
+`setup --store-key`, so only a credential the engine actually reads can be persisted. It
+respects `LAST30DAYS_CONFIG_DIR`, and refuses to start in clean-config mode
+(`LAST30DAYS_CONFIG_DIR=""`) because there is no file to edit.
+
+Security: the server binds `127.0.0.1` only, on an ephemeral port unless you pin one, and
+mints a session token that dies with the process — the URL it prints is the only way in.
+Requests from any other origin or `Host` are refused, and the page is served with a CSP
+that blocks every external request. Stored credential **values are never sent to the
+browser**: the page shows only whether a key is set. Stop it with Ctrl-C; it holds the
+terminal while it runs.
 
 ---
 

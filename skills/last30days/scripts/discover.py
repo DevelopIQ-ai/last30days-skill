@@ -5,12 +5,14 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
 import uuid
 from collections import Counter
 from datetime import UTC, datetime
 from pathlib import Path
 
+from lib import library
 from lib.discovery import Config, EngineSearch, run
 from lib.discovery_providers import Jev, Planner, ProviderError
 
@@ -132,13 +134,17 @@ def main(argv=None):
             if key in config_values:
                 config_values[key] = tuple(config_values[key])
         cfg = Config(**config_values)
+        # Checkpoints follow the same LAST30DAYS_MEMORY_DIR convention as saved
+        # reports (pipeline._local_writes, doctor's library block). Hardcoding
+        # the default library location here sent discovery output somewhere the
+        # user had explicitly moved everything else away from.
+        memory_dir = os.environ.get("LAST30DAYS_MEMORY_DIR") or ""
+        base = Path(memory_dir).expanduser() if memory_dir.strip() else library.DEFAULT_MEMORY_DIR
         output = (
             args.output
             or args.resume
             or (
-                Path.home()
-                / "Documents"
-                / "Last30Days"
+                base
                 / "discovery"
                 / (
                     datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")

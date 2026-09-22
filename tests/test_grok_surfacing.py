@@ -5,6 +5,7 @@ the X lane. The default auto chain is bird → xai → xurl → xquik. Pin
 LAST30DAYS_X_BACKEND=grok to enable grok explicitly.
 """
 
+import re
 import inspect
 from pathlib import Path
 from unittest import mock
@@ -53,10 +54,21 @@ def test_configuration_documents_the_grok_path_as_opt_in():
 
 
 def test_configuration_pin_row_lists_opt_ins_last():
-    """Pin row shows all backends with the opt-ins (grok, xapi) last."""
+    """Pin row shows all backends with the opt-ins (grok, xapi) last.
+
+    Ordering is the contract, not the exact list: a new auto-chain backend
+    (getxapi) is allowed to appear between xquik and the opt-ins, but grok and
+    xapi must stay at the end so the row keeps reading "these two are opt-in".
+    """
     text = (REPO / "CONFIGURATION.md").read_text()
-    # Auto-chain order first, then the opt-in backends.
-    assert "`bird` / `xai` / `xurl` / `xquik` / `grok` / `xapi`" in text
+    row = next(
+        line for line in text.splitlines() if line.startswith("| `LAST30DAYS_X_BACKEND`")
+    )
+    pins = re.search(r"Pins the X backend \(([^)]*)\)", row)
+    assert pins, "pin row does not list the selectable backends"
+    order = re.findall(r"`(\w+)`", pins.group(1))
+    assert order[:4] == ["bird", "xai", "xurl", "xquik"], order
+    assert order[-2:] == ["grok", "xapi"], order
 
 
 def test_configuration_does_not_claim_grok_is_free():
