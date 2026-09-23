@@ -803,6 +803,19 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--hiring-signals", action="store_true",
                         help="Analyze public jobs/careers postings as evidence-backed company focus signals.")
     parser.add_argument("--plan", help="JSON query plan (skips internal LLM planner). Can be a JSON string or a file path.")
+    parser.add_argument(
+        "--strict",
+        nargs="?",
+        const=True,
+        default=None,
+        metavar="CAPS",
+        help=(
+            "Refuse to run with degraded capabilities instead of falling back "
+            "silently. Bare --strict requires plan, rerank, and web; pass a "
+            "comma-separated subset to narrow it (e.g. --strict plan,rerank). "
+            "Also settable as LAST30DAYS_STRICT."
+        ),
+    )
     parser.add_argument("--save-suffix", help="Suffix for saved output filename (e.g., 'gemini' → kanye-west-raw-gemini.md)")
     parser.add_argument("--subreddits", help="Comma-separated broad/category subreddit names to search (e.g., SaaS,Entrepreneur)")
     parser.add_argument("--dedicated-subreddits", help="Comma-separated entity-home subreddit names (e.g., Kanye,WestSubEver). Pulled in full (top+hot+new) and exempt from the relevance floor since the whole sub is the topic.")
@@ -3830,6 +3843,26 @@ def _main(
             except ValueError as exc:
                 sys.stderr.write(f"[Planner] Invalid --plan schema: {exc}.\n")
                 raise SystemExit(2)
+
+        # Strict capability gate. Placed here deliberately: after --plan is
+        # parsed and validated (so plan presence is known) but before
+        # auto-resolve, which is the first step that touches the network. A
+        # strict refusal therefore costs nothing. --strict wins over the env
+        # form when both are present.
+        from lib import capabilities
+        strict_raw = args.strict if args.strict is not None else config.get("LAST30DAYS_STRICT")
+        try:
+            required = capabilities.parse_required(strict_raw)
+        except ValueError as exc:
+            sys.stderr.write(f"[last30days] {exc}\n")
+            return 2
+        if required:
+            missing = capabilities.check(
+                config, required, plan_provided=external_plan is not None
+            )
+            if missing:
+                sys.stderr.write(capabilities.render_failure(missing))
+                return 3
 
         # Auto-resolve: use web search to discover subreddits/handles before planning.
         # This is the engine-side equivalent of SKILL.md Steps 0.55/0.75 for platforms

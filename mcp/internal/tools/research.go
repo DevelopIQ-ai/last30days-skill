@@ -3,6 +3,7 @@ package tools
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -31,11 +32,25 @@ func Register(s *server.MCPServer, cfg Config) {
 				"Research what people are actually saying about any topic in the last 30 days. "+
 					"Aggregates Reddit, X, YouTube, Hacker News, Polymarket, GitHub, and the web, "+
 					"scored by upvotes, likes, transcripts, and real-money prediction-market odds. "+
-					"Returns the engine's compact output for the model to synthesize.",
+					"Returns the engine's compact output for the model to synthesize.\n\n"+
+					"YOU ARE THE PLANNER. Always pass `plan`. The engine has no model of "+
+					"its own: without a plan it searches the raw topic string once, with no "+
+					"decomposition and no disambiguation, which is how a search for a company "+
+					"returns unrelated results that merely share its name. Writing the plan "+
+					"costs you one step and no API key -- you are the LLM the engine lacks.",
 			),
 			mcplib.WithString("topic", mcplib.Required(), mcplib.Description("The subject to research (a person, company, product, event, or general topic).")),
 			mcplib.WithString("emit", mcplib.Description("Output shape: 'compact' (default) for inline synthesis or 'html' to save a shareable brief alongside the response.")),
 			mcplib.WithBoolean("save", mcplib.Description("Persist the synthesis as a markdown report under ~/Documents/Last30Days/ (or LAST30DAYS_MEMORY_DIR if set).")),
+			mcplib.WithString("plan", mcplib.Description(
+				"JSON query plan you author. Strongly recommended -- omitting it drops the "+
+					"engine to a single literal-string search. Shape: "+
+					`{"intent":"entity|concept|breaking_news","freshness_mode":"strict_recent|evergreen_ok",`+
+					`"cluster_mode":"story|none","subqueries":[{"label":"primary",`+
+					`"search_query":"<what to search>","ranking_query":"<the question results are ranked against>",`+
+					`"sources":["reddit","x","hackernews","youtube","github","grounding"],"weight":1.0}]}. `+
+					"Write 2-4 subqueries that attack different angles, and disambiguate in "+
+					"search_query when the topic name is ambiguous.")),
 			mcplib.WithReadOnlyHintAnnotation(false),
 			mcplib.WithDestructiveHintAnnotation(false),
 			mcplib.WithOpenWorldHintAnnotation(true),
@@ -62,6 +77,23 @@ func makeResearchHandler(cfg Config) server.ToolHandlerFunc {
 			return mcplib.NewToolResultError(err.Error()), nil
 		}
 
+		plan, err := planArgument(args)
+		if err != nil {
+			return mcplib.NewToolResultError(err.Error()), nil
+		}
+		// The engine reads --plan from a file path transparently. Going
+		// through a temp file avoids handing a JSON blob to the shell, the
+		// same reason SKILL.md tells the model to use mktemp: an apostrophe
+		// in a ranking_query otherwise breaks the invocation.
+		var planPath string
+		if plan != "" {
+			planPath, err = writeTempPlan(plan)
+			if err != nil {
+				return mcplib.NewToolResultError(fmt.Sprintf("could not stage plan: %v", err)), nil
+			}
+			defer os.Remove(planPath)
+		}
+
 		src, err := engine.EngineFS()
 		if err != nil {
 			return mcplib.NewToolResultError(fmt.Sprintf("engine source unavailable: %v", err)), nil
@@ -74,7 +106,7 @@ func makeResearchHandler(cfg Config) server.ToolHandlerFunc {
 			)), nil
 		}
 
-		runArgs := researchRunArgs(topic, emit, save)
+		runArgs := researchRunArgs(topic, emit, save, planPath)
 
 		res, runErr := engine.Run(ctx, engine.RunOptions{
 			CacheDir: cacheDir,
@@ -87,12 +119,73 @@ func makeResearchHandler(cfg Config) server.ToolHandlerFunc {
 	}
 }
 
-func researchRunArgs(topic, emit string, save bool) []string {
+func researchRunArgs(topic, emit string, save bool, planPath string) []string {
 	runArgs := []string{topic, "--emit=" + emit, "--no-browser-cookies"}
 	if save {
 		runArgs = append(runArgs, "--save-dir", mcpSaveDir())
 	}
+	if planPath != "" {
+		runArgs = append(runArgs, "--plan", planPath)
+	}
 	return runArgs
+}
+
+// planArgument accepts the plan as a JSON object or as a JSON string, since
+// models emit both. It is validated here so a malformed plan is a tool error
+// naming the problem, rather than a silent drop to the engine's one-query
+// fallback -- which is the failure this whole argument exists to prevent.
+func planArgument(args map[string]any) (string, error) {
+	raw, ok := args["plan"]
+	if !ok || raw == nil {
+		return "", nil
+	}
+	var encoded []byte
+	switch typed := raw.(type) {
+	case string:
+		if strings.TrimSpace(typed) == "" {
+			return "", nil
+		}
+		encoded = []byte(typed)
+	case map[string]any:
+		var err error
+		encoded, err = json.Marshal(typed)
+		if err != nil {
+			return "", fmt.Errorf("plan could not be encoded: %w", err)
+		}
+	default:
+		return "", errors.New("plan must be a JSON object or a JSON string")
+	}
+
+	var probe struct {
+		Subqueries []struct {
+			SearchQuery string `json:"search_query"`
+		} `json:"subqueries"`
+	}
+	if err := json.Unmarshal(encoded, &probe); err != nil {
+		return "", fmt.Errorf("plan is not valid JSON: %w", err)
+	}
+	if len(probe.Subqueries) == 0 {
+		return "", errors.New("plan needs at least one entry in subqueries")
+	}
+	for i, sq := range probe.Subqueries {
+		if strings.TrimSpace(sq.SearchQuery) == "" {
+			return "", fmt.Errorf("plan subquery %d has an empty search_query", i+1)
+		}
+	}
+	return string(encoded), nil
+}
+
+func writeTempPlan(plan string) (string, error) {
+	f, err := os.CreateTemp("", "last30days-plan-*.json")
+	if err != nil {
+		return "", err
+	}
+	defer f.Close()
+	if _, err := f.WriteString(plan); err != nil {
+		os.Remove(f.Name())
+		return "", err
+	}
+	return f.Name(), nil
 }
 
 func mcpSaveDir() string {
