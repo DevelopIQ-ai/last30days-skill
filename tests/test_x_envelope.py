@@ -156,14 +156,31 @@ def _no_backend():
 
 def _run(envelope, *, config=None, x_handle=None, x_related=None, depth="default",
          plan=None, requested=("x",), topic=TOPIC, **kwargs):
+    # These exercise envelope wiring, not capability negotiation, so the
+    # helper declares what an agent-driven host declares: it wrote the plan
+    # (passed below), it will judge relevance, and it owns the web lane. A
+    # test that cares can still override either via `config`.
+    merged_config = {"_agent_rerank": True, "LAST30DAYS_NATIVE_SEARCH": "1"}
+    merged_config.update(config or {})
     with _no_backend():
         return pipeline.run(
-            topic=topic, config=dict(config or {}), depth=depth,
+            topic=topic, config=merged_config, depth=depth,
             requested_sources=list(requested) if requested is not None else None,
             mock=False, x_handle=x_handle, x_related=x_related,
             external_plan=plan or _plan(), x_posts=envelope,
             web_backend="none", save_dir="", **kwargs,
         )
+
+
+def _plan_path():
+    """Write the shared test plan to a temp file and return its path."""
+    import json as _json
+    import tempfile as _tempfile
+
+    handle = _tempfile.NamedTemporaryFile("w", suffix=".json", delete=False)
+    _json.dump(_plan(), handle)
+    handle.close()
+    return handle.name
 
 
 def _capture(fn):
@@ -190,7 +207,8 @@ class TestIngestion:
 
         with _no_backend() as fetch:
             report = pipeline.run(
-                topic=TOPIC, config={}, depth="default", requested_sources=["x"],
+                topic=TOPIC, config={"_agent_rerank": True, "LAST30DAYS_NATIVE_SEARCH": "1"},
+                depth="default", requested_sources=["x"],
                 mock=False, x_handle=SUBJECT, external_plan=_plan(), x_posts=envelope,
                 web_backend="none", save_dir="",
             )
@@ -809,7 +827,7 @@ class TestPipelineWiring:
         assert "x" in report.query_plan.source_weights or report.items_by_source["x"]
 
     def test_lane_signal_without_envelope_records_not_passed(self):
-        config = {"LAST30DAYS_X_HOST_LANE": "1"}
+        config = {"LAST30DAYS_X_HOST_LANE": "1", "_agent_rerank": True, "LAST30DAYS_NATIVE_SEARCH": "1"}
         with mock.patch("lib.env.x_backend_chain", return_value=[]), \
              mock.patch("lib.env.x_pending_browser_auth", return_value=False):
             assert "x" in pipeline.available_sources(config, None)
@@ -823,7 +841,7 @@ class TestPipelineWiring:
         assert report.source_status["x"].detail == x_envelope.DETAIL_NOT_PASSED
 
     def test_lane_signal_with_bearer_still_records_not_passed(self):
-        config = {"LAST30DAYS_X_HOST_LANE": "1", "X_BEARER_TOKEN": "dummy-bearer"}
+        config = {"LAST30DAYS_X_HOST_LANE": "1", "X_BEARER_TOKEN": "dummy-bearer", "_agent_rerank": True, "LAST30DAYS_NATIVE_SEARCH": "1"}
         with mock.patch("lib.env.x_backend_chain", return_value=["xapi"]), \
              mock.patch("lib.pipeline._fetch_x_backend", side_effect=AssertionError("must not fetch")), \
              mock.patch("lib.x_api.search_handles", side_effect=AssertionError("no lanes")):
@@ -835,7 +853,7 @@ class TestPipelineWiring:
         assert report.source_status["x"].detail == x_envelope.DETAIL_NOT_PASSED
 
     def test_discovery_enrichment_pass_with_signal_records_nothing_for_x(self):
-        config = {"LAST30DAYS_X_HOST_LANE": "1"}
+        config = {"LAST30DAYS_X_HOST_LANE": "1", "_agent_rerank": True, "LAST30DAYS_NATIVE_SEARCH": "1"}
         with mock.patch("lib.env.x_backend_chain", return_value=[]), \
              mock.patch("lib.env.x_pending_browser_auth", return_value=False):
             assert "x" not in pipeline.available_sources(config, None, suppress_x_host_lane=True)
@@ -1107,8 +1125,12 @@ class TestCli:
 
     def test_cli_run_end_to_end_emits_x_citations_only(self, tmp_path):
         path = _basic(tmp_path)
-        argv = [TOPIC, "--x-posts", path, "--x-handle", SUBJECT, "--search", "x", "--web-backend", "none"]
-        rc, out, err = _cli([*argv, "--emit", "md"], tmp_path, real_run=True)
+        # real_run=True reaches pipeline.run, so this invocation has to
+        # declare the agent-driven capabilities like any real caller.
+        argv = [TOPIC, "--x-posts", path, "--x-handle", SUBJECT, "--search", "x",
+                "--web-backend", "none", "--plan", _plan_path(), "--agent-rerank"]
+        rc, out, err = _cli([*argv, "--emit", "md"], tmp_path, real_run=True,
+                            config={"LAST30DAYS_NATIVE_SEARCH": "1"})
         assert rc == 0, err
         assert "host-fetched X: accepted 3 of 3" in err
         assert "via X connector" in out
@@ -1116,7 +1138,8 @@ class TestCli:
         citations = re.findall(r"https?://[^\s)\]]+/status/\d+", out)
         assert len(citations) >= 3 and all(c.startswith("https://x.com/") for c in citations)
         assert "Optional source omitted" not in out + err
-        rc, html, err = _cli([*argv, "--emit", "html"], tmp_path, real_run=True)
+        rc, html, err = _cli([*argv, "--emit", "html"], tmp_path, real_run=True,
+                             config={"LAST30DAYS_NATIVE_SEARCH": "1"})
         assert rc == 0, err
         assert all(h.startswith("https://x.com/") for h in _hrefs(html) if "/status/" in h)
         assert "Optional source omitted" not in html + err

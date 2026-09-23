@@ -295,8 +295,19 @@ def search_github(
         _log("No GitHub token; using the unauthenticated REST tier (low rate limit)")
     _log(f"Searching for '{core}' (raw: '{topic}', since {from_date}, count={count})")
 
-    # Build search query with date filter
-    base_q = f"{core} created:>{from_date}"
+    # Build search query with date filter.
+    #
+    # `is:public` is not cosmetic. GitHub's search API answers as whoever is
+    # authenticated, and this engine will use a GITHUB_TOKEN or fall back to
+    # `gh auth token`. A developer signed into gh with `repo` scope therefore
+    # searches their own private repositories, and those results land in a
+    # report whose entire premise is public conversation -- unmarked, and
+    # carrying private titles, bodies and comments into a saved brief and into
+    # a hosted reasoning prompt. Measured on one account: 184 hits
+    # authenticated, 64 with this qualifier, 64 anonymously. The qualifier
+    # restores exact parity with what the public can see, at the API rather
+    # than by filtering afterwards, so no private text is ever fetched.
+    base_q = f"{core} created:>{from_date} is:public"
 
     def _search(qualifier: Optional[str]) -> Optional[Dict[str, Any]]:
         q = f"{base_q} {qualifier}" if qualifier else base_q
@@ -623,7 +634,10 @@ def _fetch_top_issues(repo: str, token: str) -> Dict[str, Any]:
     result: Dict[str, Any] = {}
 
     # Top feature request: issues with enhancement label, sorted by reactions
-    feat_q = urllib.parse.quote(f"repo:{repo} is:issue is:open label:enhancement")
+    # is:public for the same reason as the topic search above: --github-repos
+    # is user-supplied and could name a private repo, and this result is
+    # rendered into a public-conversation report.
+    feat_q = urllib.parse.quote(f"repo:{repo} is:issue is:open is:public label:enhancement")
     feat_url = f"{SEARCH_URL}?q={feat_q}&sort=reactions&order=desc&per_page=1"
     feat_data = _fetch_json(feat_url, token=token, timeout=10)
     if feat_data and feat_data.get("items"):
@@ -636,7 +650,7 @@ def _fetch_top_issues(repo: str, token: str) -> Dict[str, Any]:
         }
     elif feat_data and feat_data.get("total_count", 0) == 0:
         # No enhancement label; fall back to top issue by reactions
-        fallback_q = urllib.parse.quote(f"repo:{repo} is:issue is:open")
+        fallback_q = urllib.parse.quote(f"repo:{repo} is:issue is:open is:public")
         fallback_url = f"{SEARCH_URL}?q={fallback_q}&sort=reactions&order=desc&per_page=1"
         fallback_data = _fetch_json(fallback_url, token=token, timeout=10)
         if fallback_data and fallback_data.get("items"):

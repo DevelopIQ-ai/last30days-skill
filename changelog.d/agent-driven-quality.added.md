@@ -1,5 +1,0 @@
-Let the hosting agent drive the inference the engine has no model for, and refuse to run when a quality layer is silently absent.
-
-The MCP `research` tool now accepts a `plan` argument. Without one the engine falls back to a single literal-string search with no decomposition and no disambiguation, which is how a search for a company returns unrelated results that merely share its name. The tool description tells the calling model it is the planner, and a malformed plan is a tool error naming the problem rather than a silent drop to that fallback.
-
-`--strict` (also `LAST30DAYS_STRICT`) turns off the individual fallbacks for the planner, reranker, and web search. Each is defensible alone, but together they can produce a confident report with four of five quality layers missing and still exit 0. Strict runs refuse to start, naming every missing capability, its effect on the result, and how to supply it. Pass a comma-separated subset (`--strict plan,rerank`) to narrow it. The default path is unchanged.

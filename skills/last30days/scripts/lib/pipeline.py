@@ -214,7 +214,21 @@ def _resolve_depth_settings(depth: str, config: dict[str, Any]) -> dict[str, int
     if max_results is not None:
         settings["pool_limit"] = int(max_results)
         settings["rerank_limit"] = int(max_results)
+    # Agent-judged relevance: the engine is not ranking, so its own shortlist
+    # cut is the wrong place to lose a candidate. An explicit --max-results
+    # still wins -- the user asked for a size and this must not override it.
+    if config.get("_agent_rerank") and max_results is None:
+        settings["rerank_limit"] = int(settings["rerank_limit"] * AGENT_RERANK_WIDENING)
+        settings["pool_limit"] = int(settings["pool_limit"] * AGENT_RERANK_WIDENING)
     return settings
+
+
+# How much wider the candidate set gets when the agent is doing the judging.
+# The engine's shortlist exists to keep a paid reranking prompt small; with no
+# such prompt, truncating early only hides candidates from the one reader that
+# can actually assess them. Doubling is enough to matter without turning the
+# evidence block into something the agent has to skim.
+AGENT_RERANK_WIDENING = 2
 
 # Per-handle result caps for the X handle-search lanes. The FROM lane (the
 # subject's own timeline) is the single best source for a person topic, so it
@@ -2096,6 +2110,28 @@ def run(
     # parallel entity sub-runs can still share in-run hits.
     if not internal_subrun:
         youtube_yt.reset_search_cache()
+    # Capability gate. It lives here, in the function that actually retrieves
+    # and ranks, rather than in the CLI: this is the only place that can
+    # produce a degraded report, and gating the CLI instead would refuse runs
+    # that never reach retrieval at all (a cached re-render, a caller that
+    # supplies its own report).
+    #
+    # Unconditional by design. An opt-in safeguard is one nobody turns on, and
+    # every capability is satisfiable by the hosting agent for free -- a plan
+    # it writes, --agent-rerank, and a host that declares native web search.
+    # mock replays fixtures and performs no inference, so there is nothing for
+    # a planner or a judge to be missing from.
+    if not mock:
+        from . import capabilities
+
+        missing = capabilities.check(
+            config,
+            plan_provided=external_plan is not None,
+            agent_rerank=bool(config.get("_agent_rerank")),
+        )
+        if missing:
+            raise capabilities.CapabilityError(missing)
+
     settings = _resolve_depth_settings(depth, config)
     requested_sources = normalize_requested_sources(requested_sources)
     # Wall-clock origin for budget-aware enrichment lanes. Amazon review
@@ -2858,6 +2894,17 @@ def run(
 
     clusters = cluster_candidates(ranked_candidates, plan)
     warnings = _warnings(items_by_source, ranked_candidates, bundle.errors_by_source, degraded_by_source)
+    # Say plainly that nothing judged relevance. Without this the evidence
+    # block is indistinguishable from a reranked one, and the reader has no
+    # way to know the ordering carries no opinion about whether a result is
+    # even on topic -- which is precisely how a Club Penguin tweet reads as a
+    # finding about a company.
+    if config.get("_agent_rerank"):
+        warnings.append(
+            "Ordering is retrieval order (fusion rank and engagement), not relevance. "
+            "No model judged whether these results are about the topic -- you are the "
+            "reader doing that. Discard off-topic items rather than summarizing them."
+        )
     # One-sided entity coverage is a reporting warning, not a source failure:
     # marking the source PARTIAL would trip LAST30DAYS_STRICT_EXIT on runs that
     # returned good X results.

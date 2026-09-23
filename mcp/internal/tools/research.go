@@ -111,8 +111,21 @@ func makeResearchHandler(cfg Config) server.ToolHandlerFunc {
 		res, runErr := engine.Run(ctx, engine.RunOptions{
 			CacheDir: cacheDir,
 			Args:     runArgs,
+			// An MCP host is an agent host: it has its own web search and is
+			// expected to do the general-web lane itself, which is the same
+			// declaration SKILL.md makes on agent hosts. Without it the engine
+			// would both run its worse keyless floor and fail the web
+			// capability check.
+			ExtraEnv: []string{"LAST30DAYS_NATIVE_SEARCH=1"},
 		})
 		if runErr != nil {
+			// Exit 3 is the capability gate declining the work, not a crash.
+			// Its stderr is a set of instructions addressed to this model, so
+			// surface it as such -- "subprocess exited with code 3" reads like
+			// a broken install and invites a retry that will fail identically.
+			if res != nil && res.ExitCode == engineRefusedExitCode {
+				return mcplib.NewToolResultError(formatRefusal(res)), nil
+			}
 			return mcplib.NewToolResultError(formatRunError(runErr, res)), nil
 		}
 		return mcplib.NewToolResultText(string(res.Stdout)), nil
@@ -120,7 +133,12 @@ func makeResearchHandler(cfg Config) server.ToolHandlerFunc {
 }
 
 func researchRunArgs(topic, emit string, save bool, planPath string) []string {
-	runArgs := []string{topic, "--emit=" + emit, "--no-browser-cookies"}
+	// --agent-rerank is unconditional here: the caller of this tool is by
+	// definition a model that can judge relevance while synthesizing, and the
+	// engine only acts on the flag when it has no reranking model of its own.
+	// Passing it never degrades a key-configured install, and without it the
+	// capability gate would refuse every keyless MCP run.
+	runArgs := []string{topic, "--emit=" + emit, "--no-browser-cookies", "--agent-rerank"}
 	if save {
 		runArgs = append(runArgs, "--save-dir", mcpSaveDir())
 	}
@@ -241,6 +259,25 @@ func boolArgument(args map[string]any, name string) (bool, error) {
 
 // formatRunError flattens engine.Run's distinct error shapes into a single
 // user-facing message that includes the relevant stderr context.
+// engineRefusedExitCode is what last30days.py returns when the capability
+// gate declines a run. Distinct from a crash so a caller can tell "you did
+// not give me what I need" from "something broke".
+const engineRefusedExitCode = 3
+
+// formatRefusal leads with what the model must do differently. The engine's
+// own block already names each gap, its effect, and both routes, so this adds
+// only the framing the exit code alone does not carry.
+func formatRefusal(res *engine.RunResult) string {
+	var msg strings.Builder
+	msg.WriteString("The research engine declined this run: it was not given what it needs ")
+	msg.WriteString("to produce a trustworthy result. This is not a failure to retry as-is.\n\n")
+	msg.WriteString("Pass a `plan` argument to this tool (you are the planner) and rerun. ")
+	msg.WriteString("If a web-search capability is also listed below, either configure one of ")
+	msg.WriteString("the named keys or do the general-web searching yourself.\n\n")
+	msg.Write(res.Stderr)
+	return msg.String()
+}
+
 func formatRunError(runErr error, res *engine.RunResult) string {
 	var msg strings.Builder
 	msg.WriteString(runErr.Error())

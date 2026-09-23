@@ -73,3 +73,49 @@ def _no_ambient_credentials(monkeypatch):
         if name in exact or name.endswith(suffixes):
             monkeypatch.delenv(name, raising=False)
     yield
+
+
+def pytest_configure(config):
+    config.addinivalue_line(
+        "markers",
+        "raw_capabilities: run pipeline.run against the real capability gate, "
+        "without the agent-host declarations the suite supplies by default",
+    )
+
+
+@pytest.fixture(autouse=True)
+def _tests_run_as_an_agent_host(request):
+    """Declare the agent-driven capabilities that ``pipeline.run`` requires.
+
+    The engine has no model of its own, so ``pipeline.run`` refuses to start
+    unless the caller supplies a query plan, says who is judging relevance, and
+    covers the web lane. A real caller declares all three; this suite is full
+    of tests that call ``run`` to exercise something else entirely (envelope
+    wiring, transport outcomes, backend chains) and have no opinion about any
+    of it.
+
+    Declaring the capabilities here, once, keeps those tests about their own
+    subject. It does **not** stub the gate: ``capabilities.check`` still runs,
+    so a regression inside it still fails the suite. What the fixture supplies
+    is only what an agent host would supply.
+
+    Mark a test ``@pytest.mark.raw_capabilities`` to face the real gate --
+    that is how the refusal path itself is tested.
+    """
+    if request.node.get_closest_marker("raw_capabilities"):
+        yield
+        return
+
+    from lib import capabilities as _capabilities
+
+    real_check = _capabilities.check
+
+    def _as_agent_host(config, *, plan_provided, agent_rerank):
+        return real_check(
+            {**config, "LAST30DAYS_NATIVE_SEARCH": "1"},
+            plan_provided=True,
+            agent_rerank=True,
+        )
+
+    with mock.patch.object(_capabilities, "check", _as_agent_host):
+        yield

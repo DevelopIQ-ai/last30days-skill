@@ -1,88 +1,101 @@
-"""Strict capability gate: fail loudly instead of degrading silently.
+"""Capability gate: the engine refuses to run degraded.
 
-The engine is built to keep going when a capability is missing. Each fallback
-is individually defensible -- a cron job with no LLM key should still return
-something -- but they compose badly. A run can lose the planner, the reranker,
-and web search at once and still exit 0 with a confident-looking report, and
-nothing in that report says which layers were absent.
+This engine has no model of its own. Every inference step is either handed to
+it by the hosting agent or bought with an API key, and historically when
+neither was present it fell back. Each fallback was defensible alone; together
+they are how a run produced a confident report with four of five quality
+layers missing and still exited 0.
 
-That failure mode is not hypothetical. A run for a company with no public
-footprint produced a keyword match on a two-word string, ranked by upvotes,
-with the general-web lane dead, and read as though it were a finding.
+There is no opt-in flag here any more. The gate is unconditional, because a
+silent fallback is worse than an error and an option nobody sets is not a
+safeguard. A run that cannot do the work refuses to start and says exactly
+what is missing.
 
-``--strict`` turns the fallbacks off. Every capability listed below must be
-genuinely present or the run refuses to start, naming what is missing and how
-to supply it. Nothing here changes the default path: a run without ``--strict``
-behaves exactly as before.
+**Every capability is satisfiable by the agent, without an API key.** That is
+the point of the design, not a consolation:
 
-The gate sits after ``--plan`` is parsed and before auto-resolve, which is the
-first step that touches the network, so a strict refusal costs nothing.
+- ``plan`` -- the agent writes the query plan. It is the LLM the engine lacks.
+- ``rerank`` -- ``--agent-rerank`` says the agent will judge relevance itself
+  while synthesizing, so the engine stops pretending upvote-and-keyword order
+  is relevance order.
+- ``web`` -- on a host with native web search the agent does the searching,
+  which is already why the engine suppresses its keyless floor there.
+
+An API key is an alternative for ``rerank`` and ``web``, never a requirement.
+
+The gate lives at the top of ``pipeline.run`` -- the one function that can
+actually produce a degraded report -- rather than in the CLI, so runs that
+never reach retrieval (a cached re-render, a caller supplying its own report)
+are not refused for missing something they were never going to use.
 """
 
 from __future__ import annotations
 
 from typing import Any
 
-# Capability -> (what it is, why its absence corrupts the result, how to fix).
-# Keep the "why" concrete: the point of strict mode is that a silent fallback
-# is worse than an error, and the message has to earn that claim.
+# Capability -> what it is, what its absence does to the result, and the two
+# ways to satisfy it. The agent route is listed first everywhere: it is free,
+# it is always available, and leading with a paid key would teach exactly the
+# wrong lesson about what this engine needs.
 CAPABILITIES: dict[str, dict[str, str]] = {
     "plan": {
         "label": "query planner",
         "why": (
             "without a plan the engine searches the raw topic string once, so a "
-            "topic gets no decomposition and no disambiguation"
+            "topic gets no decomposition and no disambiguation -- which is how a "
+            "search for a company returns results that merely share its name"
         ),
-        "fix": (
-            "pass --plan with a 2-4 subquery JSON plan (SKILL.md Step 0.75). The "
-            "hosting model writes it; no API key is involved"
+        "agent": (
+            "pass --plan with a 2-4 subquery JSON plan (SKILL.md Step 0.75). You "
+            "are the planner; no API key is involved"
         ),
+        "key": "",
     },
     "rerank": {
-        "label": "reranker",
+        "label": "relevance judgment",
         "why": (
-            "without a reasoning provider, ranking is upvotes and keyword overlap, "
-            "so nothing asks whether a result is about the topic at all"
+            "with nothing judging relevance, ranking is upvotes and keyword "
+            "overlap, so nothing ever asks whether a result is about the topic"
         ),
-        "fix": (
-            "set one of OPENAI_API_KEY, OPENROUTER_API_KEY, XAI_API_KEY, "
-            "GOOGLE_API_KEY, or GEMINI_API_KEY"
+        "agent": (
+            "pass --agent-rerank: the engine returns a wider candidate set in "
+            "retrieval order, labelled as such, and you judge relevance while "
+            "synthesizing"
+        ),
+        "key": (
+            "or set OPENAI_API_KEY, OPENROUTER_API_KEY, XAI_API_KEY, "
+            "GOOGLE_API_KEY, or GEMINI_API_KEY to have the engine rerank"
         ),
     },
     "web": {
         "label": "web search",
         "why": (
-            "without a web backend the general-web lane returns nothing, which is "
+            "without web search the general-web lane returns nothing, and that is "
             "where most coverage of a company or product lives"
         ),
-        "fix": "set BRAVE_API_KEY, EXA_API_KEY, SERPER_API_KEY, or PARALLEL_API_KEY",
+        "agent": (
+            "run on a host with native web search and do the searching yourself "
+            "(SKILL.md Step 0.55), which is already why the engine leaves the "
+            "general-web lane alone there"
+        ),
+        "key": "or set BRAVE_API_KEY, EXA_API_KEY, SERPER_API_KEY, or PARALLEL_API_KEY",
     },
 }
 
-DEFAULT_REQUIRED = ("plan", "rerank", "web")
+REQUIRED = ("plan", "rerank", "web")
 
 
-def parse_required(raw: object) -> list[str]:
-    """Parse a --strict value into capability names.
+class CapabilityError(RuntimeError):
+    """Raised by pipeline.run when a required capability is absent.
 
-    Bare ``--strict`` (True) means everything in DEFAULT_REQUIRED. A
-    comma-separated list narrows it, so a host that genuinely has no web key
-    can still demand a real planner and reranker.
+    Carries the list so the CLI can render the full report; the message keeps
+    a one-line summary for any caller that only logs ``str(exc)``.
     """
-    if raw is True or (isinstance(raw, str) and raw.strip().lower() in {"", "1", "true", "yes", "on", "all"}):
-        return list(DEFAULT_REQUIRED)
-    if raw in (None, False):
-        return []
-    if isinstance(raw, str) and raw.strip().lower() in {"0", "false", "no", "off"}:
-        return []
-    names = [token.strip().lower() for token in str(raw).split(",") if token.strip()]
-    unknown = [name for name in names if name not in CAPABILITIES]
-    if unknown:
-        raise ValueError(
-            f"unknown --strict capability: {', '.join(unknown)}; "
-            f"choose from {', '.join(sorted(CAPABILITIES))}"
-        )
-    return names
+
+    def __init__(self, missing: list[str]) -> None:
+        self.missing = list(missing)
+        labels = ", ".join(CAPABILITIES[name]["label"] for name in self.missing)
+        super().__init__(f"missing required capabilities: {labels}")
 
 
 def has_reasoning_provider(config: dict[str, Any]) -> bool:
@@ -103,9 +116,11 @@ def has_reasoning_provider(config: dict[str, Any]) -> bool:
 def has_web_backend(config: dict[str, Any]) -> bool:
     """True when a paid web-search backend is configured.
 
-    The keyless floor does not count. It is suppressed on native-search hosts
-    and returns nothing there, which is exactly the silent hole strict mode
-    exists to catch.
+    The keyless floor deliberately does not count. It is suppressed on
+    native-search hosts and returns nothing there, which is the exact silent
+    hole this gate exists to close -- a host with native search satisfies the
+    capability through ``agent_does_web`` instead, which is honest about who
+    is doing the searching.
     """
     return any(
         config.get(key)
@@ -113,35 +128,48 @@ def has_web_backend(config: dict[str, Any]) -> bool:
     )
 
 
+def agent_does_web(config: dict[str, Any]) -> bool:
+    """True when the host has native web search, so the agent covers this lane."""
+    from . import env
+
+    try:
+        return bool(env.is_native_search(config))
+    except Exception:  # noqa: BLE001 - treat an unreadable host signal as absent
+        return False
+
+
 def check(
     config: dict[str, Any],
-    required: list[str],
     *,
     plan_provided: bool,
+    agent_rerank: bool,
 ) -> list[str]:
-    """Return the names of required capabilities that are absent."""
+    """Return the names of capabilities that are absent. Empty means ready."""
     present = {
         "plan": plan_provided,
-        "rerank": has_reasoning_provider(config),
-        "web": has_web_backend(config),
+        "rerank": agent_rerank or has_reasoning_provider(config),
+        "web": has_web_backend(config) or agent_does_web(config),
     }
-    return [name for name in required if not present.get(name, False)]
+    return [name for name in REQUIRED if not present.get(name, False)]
 
 
 def render_failure(missing: list[str]) -> str:
-    """One block naming every missing capability, why it matters, and the fix."""
+    """One block naming every missing capability, its effect, and both routes."""
     lines = [
-        "[last30days] strict mode: refusing to run with degraded capabilities.",
+        "[last30days] refusing to run: the engine cannot do this work as configured.",
+        "",
+        "This engine has no model of its own. Each capability below is either",
+        "supplied by you (the agent) or bought with an API key. None is optional,",
+        "because a report produced without them reads exactly like one produced",
+        "with them.",
         "",
     ]
     for name in missing:
         entry = CAPABILITIES[name]
         lines.append(f"  MISSING  {entry['label']} ({name})")
-        lines.append(f"    effect: {entry['why']}")
-        lines.append(f"    fix:    {entry['fix']}")
+        lines.append(f"    effect:  {entry['why']}")
+        lines.append(f"    you:     {entry['agent']}")
+        if entry["key"]:
+            lines.append(f"    or key:  {entry['key']}")
         lines.append("")
-    lines.append(
-        "Strict mode is opt-in. Drop --strict (or LAST30DAYS_STRICT) to run anyway "
-        "with the fallbacks, or narrow it, e.g. --strict plan,rerank."
-    )
     return "\n".join(lines) + "\n"

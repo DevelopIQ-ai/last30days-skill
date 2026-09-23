@@ -51,7 +51,7 @@ if os.name == "nt":
 SCRIPT_DIR = Path(__file__).parent.resolve()
 sys.path.insert(0, str(SCRIPT_DIR))
 
-from lib import competitors as competitors_mod, corpus, dates, discovery_handoff, env, freshness, html_render, http, permission_preflight, pipeline, registers, render, schema, ui, x_envelope
+from lib import capabilities, competitors as competitors_mod, corpus, dates, discovery_handoff, env, freshness, html_render, http, permission_preflight, pipeline, registers, render, schema, ui, x_envelope
 
 _child_pids: set[int] = set()
 _child_pids_lock = threading.Lock()
@@ -804,16 +804,14 @@ def build_parser() -> argparse.ArgumentParser:
                         help="Analyze public jobs/careers postings as evidence-backed company focus signals.")
     parser.add_argument("--plan", help="JSON query plan (skips internal LLM planner). Can be a JSON string or a file path.")
     parser.add_argument(
-        "--strict",
-        nargs="?",
-        const=True,
-        default=None,
-        metavar="CAPS",
+        "--agent-rerank",
+        action="store_true",
         help=(
-            "Refuse to run with degraded capabilities instead of falling back "
-            "silently. Bare --strict requires plan, rerank, and web; pass a "
-            "comma-separated subset to narrow it (e.g. --strict plan,rerank). "
-            "Also settable as LAST30DAYS_STRICT."
+            "You (the hosting agent) will judge relevance while synthesizing. "
+            "The engine returns a wider candidate set in retrieval order, "
+            "labelled as such, instead of presenting upvote-and-keyword order "
+            "as relevance. Satisfies the relevance-judgment requirement with no "
+            "API key."
         ),
     )
     parser.add_argument("--save-suffix", help="Suffix for saved output filename (e.g., 'gemini' → kanye-west-raw-gemini.md)")
@@ -3844,26 +3842,6 @@ def _main(
                 sys.stderr.write(f"[Planner] Invalid --plan schema: {exc}.\n")
                 raise SystemExit(2)
 
-        # Strict capability gate. Placed here deliberately: after --plan is
-        # parsed and validated (so plan presence is known) but before
-        # auto-resolve, which is the first step that touches the network. A
-        # strict refusal therefore costs nothing. --strict wins over the env
-        # form when both are present.
-        from lib import capabilities
-        strict_raw = args.strict if args.strict is not None else config.get("LAST30DAYS_STRICT")
-        try:
-            required = capabilities.parse_required(strict_raw)
-        except ValueError as exc:
-            sys.stderr.write(f"[last30days] {exc}\n")
-            return 2
-        if required:
-            missing = capabilities.check(
-                config, required, plan_provided=external_plan is not None
-            )
-            if missing:
-                sys.stderr.write(capabilities.render_failure(missing))
-                return 3
-
         # Auto-resolve: use web search to discover subreddits/handles before planning.
         # This is the engine-side equivalent of SKILL.md Steps 0.55/0.75 for platforms
         # without WebSearch (OpenClaw, Codex, raw CLI).
@@ -4049,6 +4027,19 @@ def _main(
         # widening pipeline.run / _retrieve_stream signatures.
         if dedicated_subreddits:
             config["_dedicated_subreddits"] = dedicated_subreddits
+
+        # Ride the config dict (the _polymarket_keywords idiom) so the
+        # pipeline and renderer see it without widening run()'s signature.
+        #
+        # --agent-rerank asserts the agent CAN judge, which satisfies the
+        # capability gate. It only takes effect when the engine has no
+        # reranking model of its own: a configured provider is strictly better
+        # than retrieval order, so the flag must not switch it off. An agent
+        # can therefore pass it unconditionally without degrading a
+        # key-configured install.
+        config["_agent_rerank"] = bool(args.agent_rerank) and not (
+            capabilities.has_reasoning_provider(config)
+        )
 
         def _main_runner() -> schema.Report:
             r = pipeline.run(
@@ -4307,6 +4298,14 @@ def _main(
         else:
             entity_reports = None
             report = _main_runner()
+    except capabilities.CapabilityError as exc:
+        # Not a crash: the engine declined the work. Render the full report
+        # (effect plus both routes per capability) rather than the one-line
+        # exception text, and exit 3 so a caller can distinguish "refused" from
+        # a genuine failure.
+        progress.end_processing()
+        sys.stderr.write(capabilities.render_failure(exc.missing))
+        return 3
     except Exception as exc:
         progress.end_processing()
         progress.show_error(str(exc))
