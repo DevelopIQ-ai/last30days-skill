@@ -1,0 +1,3 @@
+**Security.** Stop pulling private repositories into reports. GitHub's search API answers as whoever is authenticated, and the engine uses `GITHUB_TOKEN` or falls back to `gh auth token` — so a developer signed into `gh` with `repo` scope was searching their own private repositories, and those results landed unmarked in a report whose entire premise is public conversation, carrying private titles, bodies and comments into saved briefs and into hosted reasoning prompts.
+
+Every GitHub search now carries `is:public`. Measured on one account: 184 hits authenticated, 64 with the qualifier, 64 anonymously — exact parity with what the public can see, enforced at the API so no private text is fetched in the first place.

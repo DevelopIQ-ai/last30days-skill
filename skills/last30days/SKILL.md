@@ -1625,6 +1625,8 @@ Store your plan as `QUERY_PLAN_JSON` - you'll pass it to the script in the next 
 4. **The command you are about to run uses `--emit=compact`.** `--emit md` is a debugging/inspection mode and is DISALLOWED as the primary user-facing flow. If you find yourself about to run `--emit md`, stop and switch to `--emit=compact`.
 5. **On WebSearch platforms the command MUST include `--plan 'QUERY_PLAN_JSON'`** plus every resolved handle/subreddit/hashtag/creator flag from Step 0.55. Omit only flags whose value was not resolvable.
 
+**The engine now enforces this.** `pipeline.run` refuses to start (exit 3) without a query plan, without `--agent-rerank` or a reranking key, and without either a web-search key or `LAST30DAYS_NATIVE_SEARCH=1`. It names every gap and how to close it. You satisfy all three for free: you write the plan, you judge relevance while synthesizing, and on a WebSearch platform you own the web lane. Always pass `--plan` and `--agent-rerank`; export `LAST30DAYS_NATIVE_SEARCH=1` on a platform with native web search.
+
 **Degraded path (missing any of the above on a WebSearch platform) is a known regression shape. It produces bland 4-bullet summaries instead of rich synthesis. Do not take it.**
 
 ---

@@ -51,7 +51,7 @@ if os.name == "nt":
 SCRIPT_DIR = Path(__file__).parent.resolve()
 sys.path.insert(0, str(SCRIPT_DIR))
 
-from lib import competitors as competitors_mod, corpus, dates, discovery_handoff, env, freshness, html_render, http, permission_preflight, pipeline, registers, render, schema, ui, x_envelope
+from lib import capabilities, competitors as competitors_mod, corpus, dates, discovery_handoff, env, freshness, html_render, http, permission_preflight, pipeline, registers, render, schema, ui, x_envelope
 
 _child_pids: set[int] = set()
 _child_pids_lock = threading.Lock()
@@ -803,6 +803,17 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--hiring-signals", action="store_true",
                         help="Analyze public jobs/careers postings as evidence-backed company focus signals.")
     parser.add_argument("--plan", help="JSON query plan (skips internal LLM planner). Can be a JSON string or a file path.")
+    parser.add_argument(
+        "--agent-rerank",
+        action="store_true",
+        help=(
+            "You (the hosting agent) will judge relevance while synthesizing. "
+            "The engine returns a wider candidate set in retrieval order, "
+            "labelled as such, instead of presenting upvote-and-keyword order "
+            "as relevance. Satisfies the relevance-judgment requirement with no "
+            "API key."
+        ),
+    )
     parser.add_argument("--save-suffix", help="Suffix for saved output filename (e.g., 'gemini' → kanye-west-raw-gemini.md)")
     parser.add_argument("--subreddits", help="Comma-separated broad/category subreddit names to search (e.g., SaaS,Entrepreneur)")
     parser.add_argument("--dedicated-subreddits", help="Comma-separated entity-home subreddit names (e.g., Kanye,WestSubEver). Pulled in full (top+hot+new) and exempt from the relevance floor since the whole sub is the topic.")
@@ -4017,6 +4028,19 @@ def _main(
         if dedicated_subreddits:
             config["_dedicated_subreddits"] = dedicated_subreddits
 
+        # Ride the config dict (the _polymarket_keywords idiom) so the
+        # pipeline and renderer see it without widening run()'s signature.
+        #
+        # --agent-rerank asserts the agent CAN judge, which satisfies the
+        # capability gate. It only takes effect when the engine has no
+        # reranking model of its own: a configured provider is strictly better
+        # than retrieval order, so the flag must not switch it off. An agent
+        # can therefore pass it unconditionally without degrading a
+        # key-configured install.
+        config["_agent_rerank"] = bool(args.agent_rerank) and not (
+            capabilities.has_reasoning_provider(config)
+        )
+
         def _main_runner() -> schema.Report:
             r = pipeline.run(
                 topic=topic,
@@ -4274,6 +4298,14 @@ def _main(
         else:
             entity_reports = None
             report = _main_runner()
+    except capabilities.CapabilityError as exc:
+        # Not a crash: the engine declined the work. Render the full report
+        # (effect plus both routes per capability) rather than the one-line
+        # exception text, and exit 3 so a caller can distinguish "refused" from
+        # a genuine failure.
+        progress.end_processing()
+        sys.stderr.write(capabilities.render_failure(exc.missing))
+        return 3
     except Exception as exc:
         progress.end_processing()
         progress.show_error(str(exc))

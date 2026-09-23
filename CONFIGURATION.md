@@ -9,7 +9,7 @@ Three layers, in order of how often you'll touch them:
 
 Per-client patterns and the experimental beta channel are at the bottom.
 
-> Skip ahead: [Where output is saved](#where-output-is-saved) - [API keys](#api-keys-env) - [Reasoning provider](#reasoning-provider-priority) - [Web search backend](#web-search-backend-priority) - [Settings UI](#settings-ui-settings) - [Trend monitoring](#trend-monitoring-store--watchlist--briefings) - [Per-client patterns](#per-client-patterns) - [Beta channel](#beta-channel)
+> Skip ahead: [Where output is saved](#where-output-is-saved) - [API keys](#api-keys-env) - [Reasoning provider](#reasoning-provider-priority) - [Web search backend](#web-search-backend-priority) - [Capability gate](#capability-gate-the-engine-refuses-to-run-degraded) - [Settings UI](#settings-ui-settings) - [Trend monitoring](#trend-monitoring-store--watchlist--briefings) - [Per-client patterns](#per-client-patterns) - [Beta channel](#beta-channel)
 
 ## Why this document exists
 
@@ -611,6 +611,34 @@ python3 skills/last30days/scripts/last30days.py "<topic>" --x-posts /tmp/x-posts
 ```bash
 printf '%s\n' "$TOKEN" | python3 skills/last30days/scripts/last30days.py setup --store-key X_BEARER_TOKEN
 ```
+
+---
+
+## Capability gate (the engine refuses to run degraded)
+
+The engine has no model of its own. Every inference step is either supplied by the
+hosting agent or bought with an API key, and `pipeline.run` refuses to start when one
+is missing rather than falling back:
+
+| Capability | What its absence does | Agent route (free) | Key route |
+| --- | --- | --- | --- |
+| Query plan | one literal-string search, no decomposition or disambiguation | `--plan` with 2-4 subqueries — you write it | — |
+| Relevance judgment | ranking is upvotes and keyword overlap | `--agent-rerank` | `OPENAI_API_KEY`, `OPENROUTER_API_KEY`, `XAI_API_KEY`, `GOOGLE_API_KEY`, `GEMINI_API_KEY` |
+| Web search | the general-web lane returns nothing | `LAST30DAYS_NATIVE_SEARCH=1` and search yourself | `BRAVE_API_KEY`, `EXA_API_KEY`, `SERPER_API_KEY`, `PARALLEL_API_KEY` |
+
+There is no flag to switch this off. An opt-in safeguard is one nobody turns on, and
+the previous behaviour — three independent fallbacks that could all fire at once and
+still exit 0 — produced reports indistinguishable from good ones.
+
+A refusal exits **3** and names every gap, its effect, and both routes.
+
+`--agent-rerank` asserts that you can judge relevance while synthesizing. The engine
+acts on it only when it has no reranking model of its own, so passing it never
+degrades a key-configured install; when it does take effect the report carries a
+warning that the ordering is retrieval order, not relevance, and the candidate set is
+widened because the engine's shortlist cut exists to keep a paid prompt small.
+
+`--mock` is exempt — it replays fixtures and performs no inference.
 
 ---
 
